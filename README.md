@@ -36,14 +36,17 @@ Trae 反代 (第三方, OpenAI)  ──► tw2api :7864 → img-proxy :7863
 | [docs/05-operations.md](docs/05-operations.md) | 日常运维：启停、换账号、看日志、升级 |
 | [docs/06-reuse.md](docs/06-reuse.md) | 怎么把这套经验套到新的供应商上 |
 | [scripts/health.mjs](scripts/health.mjs) | 一键体检：端口、模型数、凭证有效期、端到端试打 |
+| [scripts/pi-models.mjs](scripts/pi-models.mjs) | 把 Trae/CodeArts 反代写进 pi 的 `models.json`（写前备份） |
 | [scripts/verify-all.sh](scripts/verify-all.sh) | provider × 两个客户端全量实测 |
 | [check.sh](check.sh) | 上面两个的组合入口 |
 
 ## 用起来
 
 ```bash
-cd E:/router
+cd D:/router
 node router.mjs list             # 看各家状态（开关/进程/PID/opencode/端口）
+node router.mjs sync             # 让 opencode 的 provider 与开关一致
+node scripts/pi-models.mjs       # 让 pi 的 models.json 跟上（trae-local / codearts）
 node router.mjs up               # 按当前开关启动全部反代
 node router.mjs up --login       # 启动，缺凭证时打开浏览器登录
 node router.mjs login            # 只检查/补齐登录，不动开关
@@ -104,6 +107,23 @@ node router.mjs login workbuddy --force   # 强制重新登录
 | Trae | 启动 tw2api 后调 `login.ps1`，浏览器登录并自动回调 `127.0.0.1:18080` |
 | CodeArts | 启动网关后调 `/admin/api/login/start`，浏览器 OAuth 回调网关本地端口 |
 | WorkBuddy | 调 `workbuddy2pi login`，浏览器登录后写入账号池 |
+
+## 两个客户端各自怎么接
+
+六家反代对 opencode 是统一口径（都是 OpenAI 兼容端点，`router sync` 写
+`opencode.json`）；对 pi 则分两半，**写错地方会静默失效**（见
+[docs/02-pitfalls.md](docs/02-pitfalls.md) P19）：
+
+| pi 侧 provider | 谁负责 | 命令 |
+|---|---|---|
+| `qoder` / `qoder-cn` | 扩展 `pi-provider-qoder`（私有协议直连，不经反代） | `pi install integrations/qodbuddy2pi/assets/vendor/pi-provider-qoder` |
+| `workbuddy` / `workbuddy-global` | 扩展 `~/.pi/agent/extensions/workbuddy.ts`（读桌面端产品配置） | 拷过去 + `node integrations/qodbuddy2pi/assets/workbuddy2pi ensure-auth-key` |
+| `trae-local` / `codearts` | `~/.pi/agent/models.json` | `node scripts/pi-models.mjs [id] [--dry-run]` |
+
+`pi-models.mjs` 从各家 `/v1/models` 拉清单、带上 `apiKey`（Trae 取
+`integrations/traework2api/.env.local`，CodeArts 取它自己签发的 `sk-ca-...`）与
+`compat`，别的 provider（如 `TokenPlus`）原样保留，写前备份到
+`~/.pi/agent/models.backups/`。Qoder 与 WorkBuddy 会被它主动跳过并说明原因。
 
 ## Git
 

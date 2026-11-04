@@ -689,3 +689,57 @@ opencode 走的是 `@ai-sdk/openai-compatible`，它发 `system`，所以不需�
 
 **一般化**：**同一份配置在 pi 上坏、在 opencode 上好的时候，去看两者发的消息格式差异。**
 `developer` 角色是 OpenAI 较新的写法，很多国内网关不认。
+
+## P19. pi 的 provider 不是「写进 models.json 就行」——四家归扩展，两家归配置
+
+**症状一**
+
+把 Qoder 反代写进 `~/.pi/agent/models.json`（`baseUrl: http://127.0.0.1:8790/v1`，
+`apiKey: qoder-local`），pi 直接报：
+
+```
+No API key found for qoder.
+```
+
+加 `--api-key qoder-local` 就能用；换成别的 provider 名字也能用。
+
+**真因**
+
+`auth.json` 里已经有同名条目 `qoder`，但它是 **OAuth 凭据**（`type: "oauth"` +
+`refresh`/`access`）。pi 的凭据优先级是「`--api-key` → auth.json → models.json 的
+apiKey」，auth.json 命中就不会再看 models.json；而这份 OAuth 凭据又没有 provider
+扩展来消费，于是报「没有 API key」。**同名 ≠ 冲突报错，是静默地抢走。**
+Qoder 的正解是装扩展 `pi-provider-qoder`（`pi install
+integrations/qodbuddy2pi/assets/vendor/pi-provider-qoder`），由扩展直连，不进反代。
+
+**症状二**
+
+WorkBuddy 按同一条路写进 models.json 后，模型能列出来，选中一半报：
+
+```
+{"code":11102,"msg":"model [auto-chat] service info not found"}
+```
+
+**真因**
+
+反代的 `/v1/models` 是包作者按公开资料猜的静态表（见
+[01-topology.md](01-topology.md#模型清单取哪个来源)）。WorkBuddy 的真实目录在
+`~/.workbuddy/cache/acc-product-config-v*.json`（国际版在 `~/.workbuddy-ai/cache/`），
+只有扩展 `workbuddy.ts` 读它。实测国际版静态表 17 个 id 里能用的是
+`deepseek-v4.1-flash`、`glm-5.2` 这类**表里根本没有**的；`auto-chat` 表里有、服务端不认。
+
+**修法（本机现状）**
+
+| pi 侧 provider | 谁负责 | 为什么 |
+|---|---|---|
+| `qoder` / `qoder-cn` | 扩展 `pi-provider-qoder` | 私有协议 + OAuth，auth.json 同名条目抢优先级 |
+| `workbuddy` / `workbuddy-global` | 扩展 `~/.pi/agent/extensions/workbuddy.ts` | 模型表必须读桌面端落盘的目录 |
+| `trae-local` / `codearts` | `models.json`（`node scripts/pi-models.mjs`） | 没有扩展，反代 `/v1/models` 就是权威 |
+
+opencode 没有扩展机制，六家全部走反代配置（`router sync`），但 WorkBuddy 的
+模型清单要用 `workbuddy2pi [global] opencode install` 从 pi 里抄——它内部就是
+`pi --list-models` 取交集，抄的正是扩展那份目录。
+
+**一般化**：**客户端说「模型不存在」时，先分清是「连不上」还是「目录不对」。
+目录不对的典型特征是：清单里有、一用就 11102 / service info not found。
+这时候权威来源是官方客户端的落盘配置，不是网关的 `/v1/models`。**

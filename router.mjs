@@ -423,6 +423,9 @@ const PROVIDERS = [
       path.join(TRAE_DIR, 'tw2api.err.log'),
     ],
     ocProvider: 'trae-local',
+    // Trae 的 /v1/models 里混着内部子代理（summary、*_subagent、custom_model_*），
+    // 选进客户端只会报错，写 opencode 时按 id 形状剔掉
+    ocSkip: INTERNAL_MODEL_ID,
   },
   {
     id: 'codearts',
@@ -763,9 +766,17 @@ async function fetchModels(port, apiKey, timeout = 6000) {
   }
 }
 
-async function modelCount(port, apiKey) {
-  const models = await fetchModels(port, apiKey);
-  return models ? models.length : null;
+/** Trae 的模型清单里哪些不是可对话的模型（与 scripts/pi-models.mjs 保持一致）。 */
+function INTERNAL_MODEL_ID(id) {
+  return /^custom_model|_(sub)?agent(_v\d)?$|^summary$|^computer_use|^browser_use|^file_search/.test(String(id || ''));
+}
+
+async function modelCount(provider) {
+  const models = await fetchModels(provider.port, keyFor(provider.id));
+  if (!models) return null;
+  // 和写 opencode 时用同一份过滤，否则表格里的数字比客户端实际能选的多数十个
+  const usable = provider.ocSkip ? models.filter((m) => !provider.ocSkip(m.id || m.slug)) : models;
+  return usable.length;
 }
 
 async function fetchModelsRetry(port, apiKey, attempts = 3) {
@@ -1239,14 +1250,17 @@ function inspectSpec(spec, { create = false } = {}) {
 
     if (!command) return { error: '没有可执行文件' };
     if (path.isAbsolute(command) && !fs.existsSync(command)) return { error: `找不到可执行文件：${command}` };
-    if (!cwd || !fs.existsSync(cwd)) return { error: `工作目录不存在：${cwd}` };
     if (env === null) return { error: '缺少启动凭证（例如 Trae 的 TW2A_API_KEY）' };
 
+    // 先建目录再校验 cwd：ensureDirs 里就包含 cwd（workbuddy-global 的
+    // ~/.workbuddy2api/global），反过来的话首次启动永远报「工作目录不存在」。
     if (create) {
       for (const d of spec.ensureDirs || []) fs.mkdirSync(d, { recursive: true });
       fs.mkdirSync(path.dirname(log), { recursive: true });
       if (errLog !== log) fs.mkdirSync(path.dirname(errLog), { recursive: true });
     }
+
+    if (!cwd || !fs.existsSync(cwd)) return { error: `工作目录不存在：${cwd}` };
 
     return { command, args, cwd, env, log, errLog };
   } catch (e) {
@@ -1688,10 +1702,11 @@ async function addProviderFromModels(p) {
     return { ok: true, wrote: false };
   }
 
-  const models = await fetchModelsRetry(p.port, keyFor(p.id));
-  if (!models || models.length === 0) {
+  const listed = await fetchModelsRetry(p.port, keyFor(p.id));
+  if (!listed || listed.length === 0) {
     return { ok: false, reason: `拿不到模型列表（:${p.port}）` };
   }
+  const models = p.ocSkip ? listed.filter((m) => !p.ocSkip(m.id || m.slug)) : listed;
   const mod = requireShared('opencode-config.js');
   if (!mod) return { ok: false, reason: '找不到 opencode-config.js' };
 
@@ -1778,7 +1793,7 @@ async function cmdList({ json = false } = {}) {
   const rows = await Promise.all(
     PROVIDERS.map(async (p) => {
       const probe = await probePort(p.port);
-      const models = probe.up ? await modelCount(p.port, keyFor(p.id)) : null;
+      const models = probe.up ? await modelCount(p) : null;
       const pids = probe.up ? portPids(p.port) : [];
       const recorded = (runtime.processes[p.id] || []).filter((e) => pidAlive(e.pid));
       const ocFiles = locateProviderFiles(p.ocProvider);

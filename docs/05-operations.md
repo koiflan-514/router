@@ -170,7 +170,9 @@ Windows 上 `schtasks /End` **只结束 cmd.exe 包装进程**，`node`/`python`
 | 文件 | 内容 |
 |---|---|
 | `~/.pi/agent/auth.json` | Qoder 凭证（pi 与 opencode 共用） |
-| `~/.pi/agent/models.json` | pi 的 provider 与模型（含 Trae） |
+| `~/.pi/agent/models.json` | pi 的 provider 与模型（Trae、CodeArts；脚本 `scripts/pi-models.mjs` 生成） |
+| `~/.pi/agent/extensions/workbuddy.ts` | WorkBuddy 的 pi 扩展（模型表来自桌面端产品配置） |
+| `~/.pi/agent/auth.json` 的 `qoder` / `workbuddy*` | Qoder 的 OAuth 凭据、WorkBuddy 的占位 key |
 | `~/.config/opencode/opencode.json` | 本项目写的 provider |
 | `~/.config/opencode/opencode.jsonc` | Trae 的 provider（历史位置） |
 | `~/.qoder2pi/config.json` | 扩展副本路径 |
