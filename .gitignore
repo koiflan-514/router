@@ -1,0 +1,31 @@
+# router / 各反代运行时
+/.run/
+**/.run/
+*.log
+*.jsonl
+*.pid
+
+# 凭证与账号状态（本机保留，不入库）
+.env
+.env.*
+!.env.example
+**/auths/
+**/data/
+**/sessions/
+**/sessions-global/
+**/*session*.json
+**/codearts2api-data.json
+
+# 上游二进制：Trae 的 tw2api 不允许本仓库再分发；
+# CodeArts2API 请从 integrations/codearts2api 源码自行构建。
+/integrations/traework2api/tw2api.exe
+/integrations/traework2api/tw2api
+/integrations/codearts2api/codearts2api.exe
+/integrations/codearts2api/codearts2api
+
+# 依赖与缓存
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

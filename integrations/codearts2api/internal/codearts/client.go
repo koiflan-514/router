@@ -1,0 +1,466 @@
+package codearts
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// 上游固定端点。取值来自 extensions/vscode-codebot/product.json
+// 的 commercialVersionDomain.newFramework.productDomain。
+const (
+	// SnapHost 是推理（inferhub）与大多数业务 API 的入口。
+	SnapHost = "https://snap-access.cn-north-4.myhuaweicloud.com"
+	// SnapHostBackup 是备用域名（.cn 后缀，与主域名等价）。
+	SnapHostBackup = "https://snap-access.cn-north-4.myhuaweicloud.cn"
+	// IAMTokenURL 是 STS / IAM 令牌端点（登录与续期）。
+	IAMTokenURL = "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens"
+	// ClientID 是 OAuth 客户端标识（= product.json 的 urlProtocol）。
+	ClientID = "codearts-agent"
+
+	// ChatPath 是 OpenAI 兼容的推理入口。
+	ChatPath = "/api/v2/chat/completions"
+	// BuiltinModelsPath 返回可用模型清单（需 Agent-Type: PromptCenter）。
+	BuiltinModelsPath = "/v1/model/builtin"
+	// 运营活动（「活动福利」）相关入口，都需要 Agent-Type: PromptCenter。
+	//
+	// WelfareDeliveryPath 列出活动与可领取状态；
+	// WelfareClaimPath 领取指定 campaign（幂等，带 idempotentKey）；
+	// WelfareInvitePath 生成专属邀请码 / 邀请链接。
+	WelfareDeliveryPath = "/v1/ops/delivery"
+	WelfareClaimPath    = "/v1/ops/claim"
+	WelfareInvitePath   = "/v1/ops/invite/generate"
+
+	// PluginName / PluginVersion 等身份头，服务端会据此做路由与埋点。
+	// 缺省值与 CodeArts Agent 26.9.902 一致。
+	PluginName    = "codemate_vscode"
+	PluginVersion = "26.9.902"
+	IDEName       = "VSCode"
+	IDEVersion    = "26.9.902"
+	AppID         = "CodeAgent3.0"
+
+	// DefaultModel 是未指定模型时的默认上游模型。
+	//
+	// 2026-10 实测的可用清单里，glm-5.3 是通用文本模型的默认选择（积分倍率 0.79x）。
+	DefaultModel = "glm-5.3"
+)
+
+// 上游通道：只剩积分（计费）通道。
+//
+// 2026-10 起，免费权益（benefit）通道整体下线 —— `benefit-gateway-config`
+// 返回 `enabled:false`，`gateway/config`、`benefit/claim`、`user/tokens/balance`
+// 一律报 `4000: invalid channel, group not found`。因此请求头不再写
+// `maas_type`，所有模型都按积分计费。
+
+// Client 是 CodeArts 上游 HTTP 客户端。
+type Client struct {
+	HTTP *http.Client
+	// Identity 是可覆盖的上游身份头（为空时用内置缺省值）。
+	Identity Identity
+	// TokenURL 可覆盖令牌端点（为空时用 IAMTokenURL）。
+	//
+	// 生产代码不需要设置它；测试用 httptest 服务器验证续期 / 登录的并发语义
+	// （同一账号串行、不同账号并行）。用字段而不是包级变量：后者会让并行的
+	// 测试（以及登录流程的后台 goroutine）直接构成数据竞争。
+	TokenURL string
+}
+
+// tokenURL 返回实际使用的令牌端点。
+func (c *Client) tokenURL() string {
+	if c != nil && c.TokenURL != "" {
+		return c.TokenURL
+	}
+	return IAMTokenURL
+}
+
+// Identity 是发给上游的插件 / IDE 身份标识。
+type Identity struct {
+	PluginName    string `json:"plugin_name"`
+	PluginVersion string `json:"plugin_version"`
+	IDEName       string `json:"ide_name"`
+	IDEVersion    string `json:"ide_version"`
+	AppID         string `json:"app_id"`
+	Language      string `json:"language"`
+}
+
+// DefaultIdentity 返回与 CodeArts Agent 26.9.902 对齐的身份头。
+func DefaultIdentity() Identity {
+	return Identity{
+		PluginName:    PluginName,
+		PluginVersion: PluginVersion,
+		IDEName:       IDEName,
+		IDEVersion:    IDEVersion,
+		AppID:         AppID,
+		Language:      "zh-cn",
+	}
+}
+
+// NewClient 构造上游客户端。
+func NewClient() *Client {
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   15 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     true,
+	}
+	return &Client{
+		HTTP: &http.Client{
+			Transport: transport,
+			// 流式响应可能持续数分钟，不设总超时；由 context 控制
+		},
+		Identity: DefaultIdentity(),
+	}
+}
+
+// baseHeaders 构造一次请求的公共头（含身份头与 tracing 头）。
+//
+// sess 用于推导**稳定的**上游会话 ID：上游按 x-ot-session-id 统计并发会话
+// （每账号上限 3 个），每个请求都换新 ID 会迅速打满上限。
+func (c *Client) baseHeaders(sess *Session, model string) map[string]string {
+	id := c.Identity
+	if id.PluginName == "" {
+		id = DefaultIdentity()
+	}
+	traceID := RandomHex(16)
+	spanID := RandomHex(8)
+	// 同一个凭据复用同一个会话 ID（凭据轮换后会自然换新）
+	sid := sess.UpstreamSessionID()
+	if sid == "" {
+		sid = "ses_" + RandomHex(12)
+	}
+	h := map[string]string{
+		"content-type":           "application/json",
+		"app-id":                 id.AppID,
+		"x-ot-function":          "agent-general",
+		"x-ot-trace-id":          traceID,
+		"x-ot-span-id":           spanID,
+		"x-snap-traceid":         traceID + "_" + RandomHex(8),
+		"x-ot-client-type":       "IDE",
+		"x-ot-client-version":    id.IDEVersion,
+		"plugin-name":            id.PluginName,
+		"plugin-version":         id.PluginVersion,
+		"ide-name":               id.IDEName,
+		"ide-version":            id.IDEVersion,
+		"created-time":           time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+		"user-msg-id":            "msg_" + RandomHex(12),
+		"x-ot-session-id":        sid,
+		"x-ot-parent-session-id": "",
+		"user-session-id":        sid,
+		"is_confidential":        "false",
+	}
+	if id.Language != "" {
+		h["X-Language"] = id.Language
+	}
+	if model != "" {
+		// 上游会校验 model-id 与请求体里的 model 完全一致（不一致报 406），
+		// 因此这里必须与 rewriteModel 写入的值相同。
+		h["model-id"] = model
+		h["model-name"] = model
+	}
+	return h
+}
+
+// do 签名并发送一次请求，返回原始响应。
+//
+// 主域名连接失败时会自动回退到 .cn 备用域名。
+func (c *Client) do(ctx context.Context, sess *Session, method, host, path string, body []byte, headers map[string]string) (*http.Response, error) {
+	if sess == nil || sess.AccessKey == "" || sess.SecretKey == "" {
+		return nil, fmt.Errorf("账号凭据缺失或已过期，请重新登录 CodeArts Agent 或手工录入凭据")
+	}
+	var lastErr error
+	for _, h := range hostCandidates(host) {
+		rawURL := h + path
+		signed, err := signRequest(sess.AccessKey, sess.SecretKey, sess.SecurityToken, method, rawURL, body, headers)
+		if err != nil {
+			return nil, err
+		}
+		var rdr io.Reader
+		if len(body) > 0 {
+			rdr = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, rawURL, rdr)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range signed {
+			req.Header.Set(k, v)
+		}
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return resp, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("上游不可达")
+	}
+	return nil, lastErr
+}
+
+// hostCandidates 返回主域名与备用域名。
+func hostCandidates(host string) []string {
+	if host == SnapHost {
+		return []string{SnapHost, SnapHostBackup}
+	}
+	return []string{host}
+}
+
+// BuiltinModel 是上游返回的可用模型。
+//
+// 这些模型走**积分（计费）通道** —— 请求时不带 maas_type 头，按积分计费。
+type BuiltinModel struct {
+	ModelID        string       `json:"model_id"`
+	ModelName      string       `json:"model_name"`
+	ModelCategory  string       `json:"model_category"`
+	ModelDesc      string       `json:"model_desc"`
+	Enable         bool         `json:"enable"`
+	DisplayEnabled bool         `json:"display_enabled"`
+	SupportsImages bool         `json:"supports_images"`
+	Credit         []CreditTier `json:"credit"`
+}
+
+// CreditTier 是模型的分段计费档位。
+//
+// 实测取值形如：ratio=0.05、input_price=8、cache_price=2、output_price=28、
+// ratio_display=0.7x —— ratio_display 即用户看到的积分消耗倍率。
+type CreditTier struct {
+	Ratio        string `json:"ratio"`
+	InputPrice   string `json:"input_price"`
+	CachePrice   string `json:"cache_price"`
+	OutputPrice  string `json:"output_price"`
+	RatioDisplay string `json:"ratio_display"`
+	Status       string `json:"status"`
+}
+
+// CreditRatio 返回首档积分倍率的展示值（如 "0.79x"），无计费信息时返回空串。
+func (m BuiltinModel) CreditRatio() string {
+	for _, c := range m.Credit {
+		if c.RatioDisplay != "" {
+			return c.RatioDisplay
+		}
+	}
+	return ""
+}
+
+// IsBillable 报告该模型是否会消耗积分。
+func (m BuiltinModel) IsBillable() bool { return len(m.Credit) > 0 }
+
+// FetchBuiltinModels 拉取内置模型清单（需要 Agent-Type: PromptCenter）。
+func (c *Client) FetchBuiltinModels(ctx context.Context, sess *Session) ([]BuiltinModel, error) {
+	h := c.baseHeaders(sess, "")
+	h["Agent-Type"] = "PromptCenter"
+	resp, err := c.do(ctx, sess, http.MethodGet, SnapHost, BuiltinModelsPath, nil, h)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("获取内置模型失败 HTTP %d: %s", resp.StatusCode, truncate(string(raw), 300))
+	}
+	var out struct {
+		Count         int            `json:"count"`
+		BuiltinModels []BuiltinModel `json:"builtinModels"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("内置模型解析失败: %w", err)
+	}
+	return out.BuiltinModels, nil
+}
+
+// ChatStream 向 inferhub 发起流式对话，逐块回调。
+//
+// 上游返回标准 OpenAI SSE（data: {chat.completion.chunk}），
+// 因此这里只做「拆包 + 错误识别」，不做任何协议转换。
+func (c *Client) ChatStream(ctx context.Context, sess *Session, model string, body []byte, onChunk func([]byte) error) error {
+	h := c.baseHeaders(sess, model)
+	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, ChatPath, body, h)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return &UpstreamError{Status: resp.StatusCode, Message: truncate(string(raw), 600)}
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4<<20)
+	for scanner.Scan() {
+		line := bytes.TrimRight(scanner.Bytes(), "\r")
+		if len(line) == 0 {
+			continue
+		}
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(line[len("data:"):])
+		if len(payload) == 0 {
+			continue
+		}
+		if bytes.Equal(payload, []byte("[DONE]")) {
+			return nil
+		}
+		if err := onChunk(payload); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
+// Chat 向 inferhub 发起非流式对话，返回原始响应体。
+func (c *Client) Chat(ctx context.Context, sess *Session, model string, body []byte) ([]byte, error) {
+	h := c.baseHeaders(sess, model)
+	resp, err := c.do(ctx, sess, http.MethodPost, SnapHost, ChatPath, body, h)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &UpstreamError{Status: resp.StatusCode, Message: truncate(string(raw), 600)}
+	}
+	return raw, nil
+}
+
+// UpstreamError 是上游返回的错误。
+type UpstreamError struct {
+	Status  int
+	Message string
+}
+
+// Error 实现 error。
+func (e *UpstreamError) Error() string {
+	return fmt.Sprintf("上游 HTTP %d: %s", e.Status, e.Message)
+}
+
+// Probe 用一个最小请求探测凭据是否可用。
+//
+// 会消耗极少量积分（max_tokens=8），调用方应在 UI 上提示。
+func (c *Client) Probe(ctx context.Context, sess *Session, model string) error {
+	if model == "" {
+		model = DefaultModel
+	}
+	body, err := json.Marshal(map[string]any{
+		"model":      model,
+		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+		"max_tokens": 8,
+		"stream":     false,
+	})
+	if err != nil {
+		return err
+	}
+	raw, err := c.Chat(ctx, sess, model, body)
+	if err != nil {
+		return err
+	}
+	return detectUpstreamError(raw)
+}
+
+// detectUpstreamError 识别「HTTP 200 但业务失败」的响应。
+//
+// 上游对未知模型、参数非法等错误会返回 200 + {"error_code":"4005","error_msg":"..."}，
+// 不识别的话会被当成正常回复透传给客户端。
+//
+// 注意：这里返回的 Status 是**业务状态码**（从 error_code 里取），不是 HTTP 状态码。
+// 早先固定写 http.StatusOK，导致错误信息出现自相矛盾的「上游 HTTP 200: ...」。
+func detectUpstreamError(raw []byte) error {
+	var probe struct {
+		ErrorCode string          `json:"error_code"`
+		ErrorMsg  string          `json:"error_msg"`
+		Choices   json.RawMessage `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil
+	}
+	if probe.ErrorCode == "" {
+		return nil
+	}
+	if len(probe.Choices) > 0 && string(probe.Choices) != "null" {
+		return nil
+	}
+	return newBusinessError(probe.ErrorCode, probe.ErrorMsg)
+}
+
+// newBusinessError 把上游业务错误码转成 UpstreamError。
+//
+// error_code 可能是 "4005" 这样的纯数字，也可能是 "InferHub.002002009.404" 这样的复合码；
+// 取其中的 HTTP 状态段（3 位数字）作为 Status，取不到就退回 400 —— 业务错误一律是
+// 客户端可修正的问题，绝不该再出现 200。
+func newBusinessError(code, msg string) *UpstreamError {
+	if msg == "" {
+		msg = "上游返回业务错误"
+	}
+	return &UpstreamError{Status: statusFromCode(code), Message: code + ": " + msg}
+}
+
+// statusFromCode 从业务错误码里提取 HTTP 状态码。
+func statusFromCode(code string) int {
+	// 纯数字且是合法状态码
+	if n, err := strconv.Atoi(strings.TrimSpace(code)); err == nil && n >= 400 && n <= 599 {
+		return n
+	}
+	// 复合码：取最后一段 3 位数字（如 InferHub.002002009.404 -> 404）
+	if i := strings.LastIndex(code, "."); i >= 0 {
+		if n, err := strconv.Atoi(code[i+1:]); err == nil && n >= 400 && n <= 599 {
+			return n
+		}
+	}
+	return http.StatusBadRequest
+}
+
+// truncate 截断长字符串，用于错误信息。
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+// IsUpstreamBusinessError 报告一个 SSE 分片是否是业务错误。
+//
+// 返回的 status 是**业务状态码**（见 statusFromCode），调用方据此判断
+// 这是「请求本身有问题」还是「账号有问题」。
+func IsUpstreamBusinessError(payload []byte) (msg string, status int, bad bool) {
+	var probe struct {
+		ErrorCode string `json:"error_code"`
+		ErrorMsg  string `json:"error_msg"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		return "", 0, false
+	}
+	if probe.ErrorCode == "" {
+		return "", 0, false
+	}
+	msg = probe.ErrorMsg
+	if msg == "" {
+		msg = "上游返回业务错误 " + probe.ErrorCode
+	}
+	return msg, statusFromCode(probe.ErrorCode), true
+}
+
+// EnsureTrimmed 去掉字符串两端空白（供调用方复用）。
+func EnsureTrimmed(s string) string { return strings.TrimSpace(s) }

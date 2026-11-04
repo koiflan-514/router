@@ -1,0 +1,253 @@
+#!/usr/bin/env node
+/**
+ * qodbuddy2pi — 总控界面，也是整套工具的正式入口。
+ *
+ * 一页装一个 provider，用数字键或 Tab 切换：
+ *   1 Qoder                 qoder-cn（国内版）与 qoder（国际版）
+ *   2 WorkBuddy 国内版      本机 8787 的反代
+ *   3 WorkBuddy 国际版      本机 8788 的反代
+ *
+ * 三页的界面定义直接来自各自的运维命令（qoderPage / workbuddyPage），
+ * 业务逻辑一行没有复制：这里只负责把它们拼起来。
+ *
+ * 别名 qodbuddy / workbuddy2pi / qoder2pi 打开的是同一个总控，只是焦点
+ * 预落在对应页（靠 QODBUDDY_PAGE 环境变量指定，见 assets/qodbuddy）。
+ *
+ * 三个 provider 的形态并不对称：WorkBuddy 是「本机反代服务 + 多账号」，
+ * Qoder 没有服务、凭证直接落在 pi 的 auth.json，所以它的页管的是两个区域的
+ * 登录状态，而不是账号切换。
+ *
+ * 接入（安装）走 install.sh / install.ps1：那是一条一次性流水线，纯文本引导。
+ * 这里提供一个 install 子命令把它调起来，为了 npm 与 release 这两种装法——
+ * 它们只知道包目录，不知道仓库在哪，没有这个子命令就得让用户自己找脚本。
+ * 日常运维仍然只在这里。
+ */
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const { createTui, C, G, findCmd, readJson, AUTH_JSON, DATA_DIR, log } = require('./tui');
+const { qoderPage } = require('./qoder2pi');
+const wb = require('./workbuddy2pi');
+
+const HOME = require('os').homedir();
+
+/**
+ * 单独装过 WorkBuddy 或 Qoder、但对方是旧版本时，两者的导出可能对不上。
+ * 与其抛一堆栈，不如直接说清楚该重跑什么。
+ */
+function pageFactory(value) {
+  if (typeof value !== 'function') {
+    log.fail('同目录的 workbuddy2pi 版本过旧，没有导出总控需要的接口。\n'
+      + '      请在仓库里运行 ./install.sh 重新部署运维命令。');
+  }
+  return value;
+}
+
+const workbuddyPage = pageFactory(wb.workbuddyPage);
+if (!qoderPage || typeof qoderPage.refresh !== 'function') {
+  log.fail('同目录的 qoder2pi 版本过旧，没有导出总控需要的接口。\n'
+    + '      请在仓库里运行 ./install.sh 重新部署运维命令。');
+}
+
+/** 三个页；顺序就是页签上的 1/2/3。 */
+const PAGES = [
+  qoderPage,
+  workbuddyPage('domestic'),
+  workbuddyPage('global'),
+];
+
+/**
+ * 别名指定初始页：环境变量里放页号（1 起）或页签名。
+ * 认不出来就回第一页，不报错——别名只是快捷方式，不该因为名字没对上就拒绝启动。
+ */
+function initialPageFromEnv() {
+  const want = (process.env.QODBUDDY_PAGE || '').trim();
+  if (!want) return 0;
+  const n = Number(want);
+  if (Number.isInteger(n) && n >= 1 && n <= PAGES.length) return n - 1;
+  const byLabel = PAGES.findIndex((p) => p.label && p.label.toLowerCase() === want.toLowerCase());
+  return byLabel >= 0 ? byLabel : 0;
+}
+
+// ---------------------------------------------------------------- 环境检查
+
+/** 某个 provider 是不是已经接入。 */
+function configured() {
+  const auth = readJson(AUTH_JSON) || {};
+  return {
+    qoderCn: !!auth['qoder-cn'],
+    qoderGlobal: !!auth.qoder,
+    wbDomestic: fs.existsSync(path.join(HOME, '.codebuddy-session.json')),
+    wbGlobal: fs.existsSync(path.join(HOME, '.codebuddy-global-session.json')),
+  };
+}
+
+/**
+ * 环境检查：四个 provider 各自依赖什么，缺什么就说清楚。
+ * 用于 --check（纯文本，适合脚本）与 install.sh 的收尾自检。
+ */
+function check() {
+  let bad = 0;
+  const mark = (good, text, hint) => {
+    if (good) log.ok(text);
+    else {
+      bad += 1;
+      log.warn(`${text}${hint ? `　→ ${hint}` : ''}`);
+    }
+  };
+
+  mark(true, `Node.js ${process.version}`);
+  mark(!!findCmd('pi'), 'pi 已安装', '运行 install.sh');
+  // WorkBuddy 的反代是 Python 写的，由 uv 按需拉起，所以只需要 uv。
+  // Qoder 不需要它，因此这不算硬前提，只在这里提示
+  mark(!!findCmd('uv'), 'uv 已安装（仅 WorkBuddy 反代需要）', '运行 install.sh');
+  mark(fs.existsSync(AUTH_JSON), 'pi 的 auth.json 存在', '先运行一次 pi 登录');
+
+  const c = configured();
+  mark(c.wbDomestic, 'WorkBuddy 国内版已接入', 'workbuddy2pi account add');
+  mark(c.wbGlobal, 'WorkBuddy 国际版已接入', 'workbuddy2pi 里切到国际版页后添加账号');
+  mark(c.qoderCn, 'Qoder 国内版已登录', 'qoder2pi login cn pt-xxxxxx');
+  mark(c.qoderGlobal, 'Qoder 国际版已登录', 'qoder2pi login global pt-xxxxxx');
+
+  console.log('');
+  if (bad === 0) log.ok('环境检查全部通过');
+  else log.warn(`有 ${bad} 项未就绪（未接入的 provider 不影响其它 provider 使用）`);
+  return bad;
+}
+
+/**
+ * 探测：把「本机现在接入了什么」报给调用方，供安装器决定装什么。
+ *
+ * 输出 JSON 到 stdout，供 install.sh 消费。探测逻辑只此一份：总控自己
+ * 也用它渲染状态，安装器调同一个子命令，不会两处漂移。
+ */
+function probe() {
+  const c = configured();
+  const out = {
+    pi: !!findCmd('pi'),
+    uv: !!findCmd('uv'),
+    providers: {
+      'qoder-cn': c.qoderCn,
+      qoder: c.qoderGlobal,
+      workbuddy: c.wbDomestic,
+      'workbuddy-global': c.wbGlobal,
+    },
+  };
+  process.stdout.write(`${JSON.stringify(out)}\n`);
+}
+
+/**
+ * 硬门槛：不满足就没法往下走，直接说清楚并退出。
+ * 只检查真正硬的前提，可选依赖（uv、各个 provider 的登录）留给界面提示。
+ */
+/**
+ * 跑包内自带的安装器（npm 全局安装与 release 压缩包都靠它）。
+ *
+ * 不实现第二份安装逻辑：直接 exec 同目录下的 install.sh / install.ps1，
+ * 参数原样转发。两个脚本本来就按「自己旁边有 assets/」写的，所以从
+ * 包目录跑和从仓库跑是同一条路径。
+ */
+function runInstaller(args) {
+  const isWin = process.platform === 'win32';
+  const name = isWin ? 'install.ps1' : 'install.sh';
+  // 安装器在包根目录（assets/ 的上一级），不是与入口同级
+  const candidates = [
+    path.join(__dirname, '..', name),
+    path.join(__dirname, name),
+  ];
+  const script = candidates.find((f) => fs.existsSync(f));
+  if (!script) {
+    log.fail(`找不到安装器 ${name}（找过 ${candidates.join(' 与 ')}）。` +
+      '若安装包不完整，请改用仓库里的 ./install.sh，或重新安装。');
+  }
+
+  const { spawnSync } = require('child_process');
+  let r;
+  if (isWin) {
+    // PowerShell 分两种可执行名：老系统只有 powershell.exe，pwsh 是 PowerShell 7。
+    const ps = findCmd('pwsh') || findCmd('powershell');
+    if (!ps) log.fail('找不到 PowerShell，无法运行 install.ps1');
+    r = spawnSync(ps, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...args],
+      { stdio: 'inherit' });
+  } else {
+    r = spawnSync('sh', [script, ...args], { stdio: 'inherit' });
+  }
+  process.exit(r.status === null ? 1 : r.status);
+}
+
+function preflight() {
+  if (!findCmd('pi')) {
+    log.warn('未找到 pi。');
+    console.error('      Qoder 与 WorkBuddy 都是接到 pi 上的 provider：');
+    console.error('        macOS / Linux   ./install.sh');
+    console.error('        Windows         install.ps1');
+    console.error('      它会用 pi 的官方安装方式装好 pi 与依赖，然后引导你接入。');
+    process.exit(1);
+  }
+}
+
+// ---------------------------------------------------------------- 入口
+
+async function tuiMain() {
+  const page = initialPageFromEnv();
+  await createTui({
+    title: '总控',
+    subtitle: `Qoder 与 WorkBuddy（国内版 / 国际版）　·　${PAGES.length} 个 provider`,
+    pages: PAGES,
+    initialPage: page,
+  });
+}
+
+function usage() {
+  console.log(`qodbuddy2pi — Qoder 与 WorkBuddy 的总控界面
+
+用法：
+  qodbuddy2pi            进入总控界面（不带参数且是终端时默认如此）
+  qodbuddy2pi --check    只做环境检查（纯文本，适合脚本）
+  qodbuddy2pi probe      以 JSON 报出本机已接入哪些 provider（供安装器调用）
+  qodbuddy2pi install    接入 provider（跑包内自带的安装器；npm / release 装法用这个）
+  qodbuddy2pi --help     显示本帮助
+
+界面里用 1/2/3 或 Tab 切换三个 provider：
+  1  Qoder               qoder-cn（国内版）与 qoder（国际版）
+  2  WorkBuddy 国内版     本机 8787 的反代
+  3  WorkBuddy 国际版     本机 8788 的反代
+
+别名打开的是同一个总控，只是焦点预落在对应页：
+  qodbuddy                总控（第一页）
+  qoder2pi                Qoder 页
+  workbuddy2pi            WorkBuddy 国内版页
+
+接入 provider：仓库里直接跑 ./install.sh（Windows 为 install.ps1），
+npm 或 release 安装则跑 qodbuddy2pi install。两者是同一个安装器。`);
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const cmd = (argv[0] || '').toLowerCase();
+
+  if (cmd === '-h' || cmd === '--help' || cmd === 'help') return usage();
+  if (cmd === '--check' || cmd === 'check') return process.exit(check() ? 1 : 0);
+  if (cmd === 'probe') return probe();
+  // 接入 provider：把包内带的安装器跑起来，参数原样转发
+  // （--all / --only / --no-service / --non-interactive / --force-reinstall）
+  if (cmd === 'install') return runInstaller(argv.slice(1));
+
+  // 无参数且是终端：过硬门槛后进总控
+  if (!argv.length && process.stdout.isTTY && process.stdin.isTTY) {
+    preflight();
+    return tuiMain();
+  }
+  if (cmd === 'tui') {
+    preflight();
+    return tuiMain();
+  }
+  if (!argv.length) log.fail('需要在终端里运行；用法见 qodbuddy2pi --help');
+
+  usage();
+  log.fail(`未知子命令：${cmd}`);
+}
+
+main().catch((e) => log.fail(e && e.stack ? e.stack : String(e)));
