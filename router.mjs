@@ -93,6 +93,10 @@ const QWENWORK_DIR =
 // 代理自动发现端口、读桌面端落盘的模型目录，并复用其免鉴权的 qianfanproxy。
 const DUMATE_DIR =
   process.env.ROUTER_DUMATE_DIR || path.join(INTEGRATIONS_DIR, 'dumate2api');
+// WPS 灵犀反代：本仓库自写。**只接积分**（上游没有可直达的 OpenAI 兼容对话入口），
+// 从 Electron cookie jar 解出 wps_sid，读智点余额与收支明细。
+const LINGXI_DIR =
+  process.env.ROUTER_LINGXI_DIR || path.join(INTEGRATIONS_DIR, 'lingxi2api');
 
 // 统一网关：把上面十家拼成一个端口、两种方言。它不是「第十一家反代」，而是前面的一层，
 // 所以端口单独留一个（默认 8785，不占用任何一家的端口段）。
@@ -298,6 +302,8 @@ function authStatus(p) {
       return qwenworkAuth();
     case 'dumate':
       return dumateAuth();
+    case 'lingxi':
+      return lingxiAuth();
     case 'gateway':
       // 网关没有上游凭证：它靠下面几家反代的凭证工作，自己永远是「就绪」。
       return authResult(true, `聚合 ${PROVIDERS.length - 1} 家反代`);
@@ -723,6 +729,64 @@ function dumateAccounts() {
   ];
 }
 
+// ---------------------------------------------------------------- WPS 灵犀
+//
+// 登录态在 Electron 的 cookie jar（Partitions/lingxi-passport-v2-*/Network/Cookies），
+// 由反代用 DPAPI + AES-GCM 解出 wps_sid。router 这边**不去解密**：那要起 PowerShell
+// 调 DPAPI，放在 list/doctor 这种高频只读路径上太贵。这里只读反代的 /health，
+// 它已经缓存了 SID；反代没起时退回「桌面端装没装」这个本地可判的事实。
+
+function lingxiAppData() {
+  const explicit = String(process.env.LINGXI_APP_DATA || '').trim();
+  if (explicit) return explicit;
+  const base = process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming');
+  return path.join(base, 'WPS 灵犀');
+}
+
+/** 桌面端是否在本机（配置目录存在即算装了；不代表已登录）。 */
+function lingxiInstalled() {
+  try {
+    return fs.statSync(lingxiAppData()).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** 读反代 /health 的非敏感视图；反代没起就返回 null。 */
+function lingxiHealth() {
+  const file = path.join(RUN_DIR, 'lingxi-health.json');
+  return readJsonFile(file);
+}
+
+function lingxiAuth() {
+  if (!lingxiInstalled()) {
+    return authResult(false, '未安装 WPS 灵犀桌面端');
+  }
+  // 登录态只有反代能确认（SID 在加密 cookie 库里）。反代没起时如实说「未知」，
+  // 不要凭「装了桌面端」就报已登录——那会让人以为能用。
+  return {
+    ok: true,
+    state: 'unknown',
+    expiresAt: null,
+    label: '已安装（登录态由反代读 cookie 库确认，见 up lingxi 后的 account）',
+  };
+}
+
+function lingxiAccounts() {
+  if (!lingxiInstalled()) return [];
+  // 账号昵称/ID 由反代从上游 /account/profile 取；这里不重复实现那条链路。
+  return [
+    {
+      key: 'lingxi',
+      name: 'WPS 灵犀账号',
+      uid: null,
+      enabled: true,
+      active: true,
+      detail: '登录态在桌面端 cookie 库；昵称与智点余额见 curl -s http://127.0.0.1:8796/v1/quota',
+    },
+  ];
+}
+
 function accountsFor(p) {
   const rows = rawAccountsFor(p);
   for (const a of rows) a.health = accountHealth(p, a);
@@ -1020,6 +1084,7 @@ function rawAccountsFor(p) {
   if (p.kind === 'raccoon') return raccoonAccounts();
   if (p.kind === 'qwenwork') return qwenworkAccounts();
   if (p.kind === 'dumate') return dumateAccounts();
+  if (p.kind === 'lingxi') return lingxiAccounts();
   return [];
 }
 
@@ -1170,6 +1235,15 @@ function accountHealth(p, a) {
     return level('ok');
   }
 
+  if (p.kind === 'lingxi') {
+    // SID 在加密 cookie 库里，只有反代能确认；本地只能判桌面端装没装。
+    if (!lingxiInstalled()) {
+      notes.push('未安装 WPS 灵犀桌面端');
+      return level('error');
+    }
+    return level('unknown');
+  }
+
   if (p.kind === 'dumate') {
     // 登录态在桌面端 userData 里；main-server 是否在跑由端口探活单独判断。
     if (!a || !a.uid) {
@@ -1241,6 +1315,7 @@ function accountFixHint(p, a) {
   if (p.kind === 'raccoon') return `打开商汤小浣熊桌面端登录；或 node router.mjs login ${p.id}`;
   if (p.kind === 'qwenwork') return `打开千问办公桌面端登录并随便发一句（签发推理凭据）；或 node router.mjs login ${p.id}`;
   if (p.kind === 'dumate') return `打开百度搭子桌面端登录；或 node router.mjs login ${p.id}`;
+  if (p.kind === 'lingxi') return `打开 WPS 灵犀桌面端登录（SID 写入 cookie 库后反代自动读到）`;
   return `node router.mjs login ${p.id}`;
 }
 
@@ -1253,7 +1328,7 @@ function healthMark(health) {
 }
 
 function printAccounts(p, accounts) {
-  const single = ['qoder', 'loomy', 'raccoon', 'qwenwork', 'dumate'].includes(p.kind);
+  const single = ['qoder', 'loomy', 'raccoon', 'qwenwork', 'dumate', 'lingxi'].includes(p.kind);
   say(
     `${C.bold}${p.title}${C.reset}  ${dim(`:${p.port} · ${accounts.length} 个账号${single ? '（单账号）' : ''}`)}`,
   );
@@ -1576,6 +1651,11 @@ async function switchAccount(p, accounts, arg, { dryRun = false } = {}) {
     say(dim('  换号：在百度搭子桌面端退出后重新登录，反代会自动读到新登录态'));
     return 1;
   }
+  if (p.kind === 'lingxi') {
+    warn(`${p.title} 只有一个登录态，没有多账号可切换`);
+    say(dim('  换号：在 WPS 灵犀桌面端退出后重新登录，反代会自动从 cookie 库读到新 SID'));
+    return 1;
+  }
 
   if (p.kind === 'workbuddy') return switchWorkbuddyAccount(p, target, { dryRun });
   if (p.kind === 'codearts') return switchCodeartsPool(p, target, { dryRun });
@@ -1595,7 +1675,7 @@ async function switchAllAccounts(p, { dryRun = false } = {}) {
     say(dim(`  想调整轮询头：node router.mjs account ${p.id} <编号 | key>`));
     return 0;
   }
-  if (['qoder', 'loomy', 'raccoon', 'qwenwork', 'dumate'].includes(p.kind)) {
+  if (['qoder', 'loomy', 'raccoon', 'qwenwork', 'dumate', 'lingxi'].includes(p.kind)) {
     warn(`${p.title} 没有多账号池，--all 不适用`);
     return 1;
   }
@@ -1761,6 +1841,12 @@ async function removeAccountFromPool(p, accounts, arg, { dryRun = false, force =
       hint: '换号请在百度搭子桌面端退出后重新登录',
     };
   }
+  if (p.kind === 'lingxi') {
+    return {
+      error: `${p.title} 的登录态由 WPS 灵犀桌面端维护，没有可删的账号池`,
+      hint: '换号请在 WPS 灵犀桌面端退出后重新登录',
+    };
+  }
   const matched = matchAccount(accounts, arg);
   if (matched.error) return { error: matched.error };
   const target = matched.account;
@@ -1872,6 +1958,11 @@ async function addAccountToPool(p, { dryRun = false, label = '' } = {}) {
   if (p.kind === 'dumate') {
     warn(`${p.title} 只有一个登录态，请在百度搭子桌面端退出后登录另一个账号`);
     say(dim('  反代会直接读到新的 auth.json，不需要重新配置 provider'));
+    return 1;
+  }
+  if (p.kind === 'lingxi') {
+    warn(`${p.title} 只有一个登录态，请在 WPS 灵犀桌面端退出后登录另一个账号`);
+    say(dim('  反代会直接读到新的 cookie 库，不需要重新配置 provider'));
     return 1;
   }
   const before = accountsFor(p);
@@ -2627,6 +2718,38 @@ const PROVIDERS = [
     ocApiKey: 'dumate-local',
   },
   {
+    id: 'lingxi',
+    title: 'WPS 灵犀（积分）',
+    port: 8796,
+    kind: 'lingxi',
+    control: 'spawn',
+    // **只接积分，不接对话**：灵犀是 Electron + Go app-server（JSON-RPC stdio）的
+    // agent 形态，上游没有可直达的 OpenAI 兼容面（agent-runtime/chat/completions
+    // 对任何 body 都回 400，也没有模型清单接口）。所以这里 creditsOnly：
+    // router 托管进程、账号与体检，但**不写 opencode/pi 的模型 provider**，
+    // 免得客户端里出现一个选中就报错的假模型。余额由 credits 插件读 :8796/v1/quota。
+    creditsOnly: true,
+    processes: [
+      {
+        name: 'lingxi-proxy',
+        port: 8796,
+        command: () => process.execPath,
+        args: () => {
+          const script = path.join(LINGXI_DIR, 'lingxi-proxy.js');
+          if (!fs.existsSync(script)) throw new Error(`找不到 lingxi-proxy.js：${script}`);
+          return [script, '--port', '8796'];
+        },
+        cwd: () => LINGXI_DIR,
+        env: () => ({}),
+        log: () => path.join(RUN_DIR, 'lingxi.log'),
+        errLog: () => path.join(RUN_DIR, 'lingxi.log'),
+        ensureDirs: [RUN_DIR],
+        waitMs: 20000,
+      },
+    ],
+    logs: [path.join(RUN_DIR, 'lingxi.log')],
+  },
+  {
     id: 'workbuddy',
     title: 'WorkBuddy 国内版',
     port: 8787,
@@ -2993,6 +3116,8 @@ function ocModelCount(providerId) {
 }
 
 async function modelCount(provider) {
+  // 只接积分的来源没有模型清单，别每次 list 都去打那个必然 501 的端点。
+  if (provider.creditsOnly) return null;
   // WorkBuddy 反代的 /v1/models 是包作者猜的静态表（见 docs/02-pitfalls.md P3），
   // 和客户端实际能选的模型对不上。客户端从 pi 扩展拿真实目录，所以这里优先报
   // opencode 里已经写好的数量，回退时才看反代表。
@@ -4066,6 +4191,18 @@ async function loginProvider(p, { force = false } = {}) {
   else if (p.kind === 'raccoon') success = await loginRaccoon(p, { force });
   else if (p.kind === 'qwenwork') success = await loginQwenwork(p, { force });
   else if (p.kind === 'dumate') success = await loginDumate(p, { force });
+  else if (p.kind === 'lingxi') {
+    // 灵犀只能在桌面端登录（SID 写进 Electron cookie 库），没有命令行登录接口。
+    if (lingxiInstalled()) {
+      ok(`${p.title} ${lingxiAuth().label}`);
+      say(dim('  登录：打开 WPS 灵犀桌面端；反代会自动从 cookie 库读 wps_sid'));
+      say(dim('  智点余额：curl -s http://127.0.0.1:8796/v1/quota（或 opencode/pi 的 /credits）'));
+      success = true;
+    } else {
+      bad(`未安装 WPS 灵犀桌面端`);
+      success = false;
+    }
+  }
   else bad(`不知道怎么登录 ${p.title}`);
 
   // Trae/CodeArts 的登录必须先把网关跑起来；如果它本来没在跑，登录后恢复「停止」。
@@ -4557,6 +4694,10 @@ function requireShared(name) {
  * 从它的 /v1/models 拉目录，key 从 pi 的 models.json 取。
  */
 async function addProviderFromModels(p) {
+  // 只接积分的来源没有 /v1/models（反代会明确回 501），不该走到写 provider 这一步。
+  if (p.creditsOnly) {
+    return { ok: true, wrote: false };
+  }
   const existing = locateProviderFiles(p.ocProvider);
   if (existing.length) {
     const where = existing.map((f) => path.basename(f)).join('、');
@@ -4597,6 +4738,9 @@ async function refreshProviderModels(p) {
     // 网关的模型清单是十家的并集，由 `router gateway install` 写；
     // 它不是反代，没有自己的 /v1/models 目录可刷新
     return { ok: true, skipped: true, reason: '网关的模型清单由 gateway install 写入' };
+  }
+  if (p.creditsOnly) {
+    return { ok: true, skipped: true, reason: '只接积分，没有模型清单（余额由 credits 插件读）' };
   }
 
   const files = locateProviderFiles(p.ocProvider);
@@ -4658,6 +4802,9 @@ async function doSyncOpenCode(enabled, { startIds = null } = {}) {
     // 网关是叠加层：它自己的 provider 由 `router gateway install` 显式写入，
     // 不跟着开关自动增删——否则 `on gateway` 会顺手把十家的 provider 全删掉。
     if (p.gateway) continue;
+    // 只接积分的来源（WPS 灵犀）没有模型目录，写进 opencode 只会得到一个
+    // 选中就报错的假 provider。它的余额由 credits 插件直接读反代。
+    if (p.creditsOnly) continue;
     const want = enabled.includes(p.id);
     const present = ocHasProvider(p.ocProvider);
     if (want === present) continue;
@@ -4772,11 +4919,13 @@ async function cmdList({ json = false } = {}) {
     const pid = r.pid ? ` ${dim(r.pid)}` : '';
     const up = r.up ? `${C.ok}运行中${C.reset}${pid}` : `${C.dim}已停${C.reset}`;
     const control = r.control === 'tool' ? '计划任务' : 'router';
-    const oc = p?.gateway
-      ? r.oc
-        ? `${C.ok}已写入${C.reset}`
-        : `${C.dim}未安装${C.reset}`
-      : r.ocUserOwned
+    const oc = p?.creditsOnly
+      ? `${C.dim}仅积分${C.reset}`
+      : p?.gateway
+        ? r.oc
+          ? `${C.ok}已写入${C.reset}`
+          : `${C.dim}未安装${C.reset}`
+        : r.ocUserOwned
         ? `${C.dim}用户自管${C.reset}`
         : r.oc
           ? `${C.ok}已写入${C.reset}`
@@ -4805,9 +4954,15 @@ async function cmdList({ json = false } = {}) {
     }
   }
 
-  // 用户自己在 .jsonc 里配的不算漂移——我们无权改，也不该一直提示
+  // 用户自己在 .jsonc 里配的不算漂移——我们无权改，也不该一直提示。
+  // 只接积分的来源（WPS 灵犀）本来就不写 opencode provider，r.oc 恒为 false，
+  // 一样要排除，否则每次 list 都会报一条假的「开关与 opencode 不一致」。
   const ocDrift = rows.filter(
-    (r) => r.on !== r.oc && !r.ocUserOwned && !PROVIDERS.find((x) => x.id === r.id)?.gateway,
+    (r) =>
+      r.on !== r.oc &&
+      !r.ocUserOwned &&
+      !PROVIDERS.find((x) => x.id === r.id)?.gateway &&
+      !PROVIDERS.find((x) => x.id === r.id)?.creditsOnly,
   );
   if (ocDrift.length) {
     warn(`开关与 opencode 配置不一致：${ocDrift.map((r) => r.title).join('、')}`);
@@ -5492,6 +5647,12 @@ async function cmdGateway(raw) {
     }
     for (const p of PROVIDERS) {
       if (p.gateway) continue;
+      // 只接积分的来源（WPS 灵犀）没有对话端点，网关本来就不该转发到它：
+      // 这是有意例外，不是端口表漂移。打印一句说明，但不计入 drift。
+      if (p.creditsOnly) {
+        say(`${C.dim}· ${p.id} 只接积分，不进网关（预期）${C.reset}`);
+        continue;
+      }
       if (!DESCRIPTORS.some((d) => d.id === p.id)) {
         warn(`${p.id} 在 router 里有、网关表里没有（网关不会转发到它）`);
         drift += 1;
@@ -5589,6 +5750,14 @@ async function cmdDoctor() {
           ? `${C.ok} 已登录（${profile.name || shortUser(profile.accountId)}）`
           : `${C.warn} 未登录（打开百度搭子桌面端登录）`,
       );
+    }
+    if (p.kind === 'lingxi') {
+      checks.push(
+        lingxiInstalled()
+          ? `${C.ok} 桌面端已安装（仅积分；登录态由反代读 cookie 库）`
+          : `${C.warn} 未安装 WPS 灵犀桌面端`,
+      );
+      checks.push(`${C.dim}只接积分，不写 opencode/pi 模型 provider${C.reset}`);
     }
     // 本机限额：这一家的并发/速率闸门，避免「以为在限流其实没生效」
     // 网关是叠加层（不直连上游），限额对它的「免费供应商」分支才有意义

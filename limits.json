@@ -27,13 +27,22 @@
       "tier": "balanced"
     },
     "raccoon": {
-      "tier": "balanced"
+      "tier": "fast",
+      "rpm": 120,
+      "minIntervalMs": 500,
+      "burst": 4
     },
     "qwenwork": {
       "tier": "balanced"
     },
     "dumate": {
-      "tier": "balanced"
+      "tier": "fast",
+      "rpm": 120,
+      "minIntervalMs": 500,
+      "burst": 4
+    },
+    "lingxi": {
+      "tier": "safe"
     }
   },
   "free": {

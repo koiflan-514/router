@@ -482,6 +482,48 @@ curl -s http://127.0.0.1:8795/v1/models
 - opencode 的 `provider-credits` 插件已接入百度搭子：状态栏显示 `DuMate 10.3k`，
   `/credits` 里列出三个积分包与最近到期时间。
 
+## WPS 灵犀（仅积分）
+
+反代在 `integrations/lingxi2api`（本仓库自写，零依赖 Node，端口 8796）。
+**这家只接积分，不接对话**：灵犀是 Electron + Go app-server 的 agent 形态，上游没有
+可直达的 OpenAI 兼容入口（`agent-runtime/chat/completions` 对任何 body 都回 400，
+也没有模型清单接口）。所以反代只暴露只读积分端点，router 里用 `creditsOnly` 标记，
+**不写进 opencode/pi 模型清单**，免得出现选中就报错的假模型。
+
+```bash
+node router.mjs up lingxi             # 启动（只积分）
+node router.mjs login lingxi          # 确认桌面端已安装
+node router.mjs logs lingxi 80        # 看日志
+
+curl -s http://127.0.0.1:8796/health
+curl -s http://127.0.0.1:8796/v1/quota    # 智点余额 + 每个积分包
+curl -s 'http://127.0.0.1:8796/v1/usage?limit=10'   # 收支明细
+```
+
+**凭据链条**（这家唯一特殊的地方）：SID **不在** `app-server-data/auth.json`
+（那份是 `auth_storage=runtime`，落盘为空），而在 Electron 的 cookie 库：
+
+```
+%APPDATA%/WPS 灵犀/Local State → os_crypt.encrypted_key（DPAPI 保护）
+  └─ DPAPI Unprotect → 32 字节主密钥
+       └─ AES-256-GCM 解 Partitions/lingxi-passport-v2-<hash>/Network/Cookies
+          的 wps_sid（明文前有 32 字节 SHA256(host) 前缀，要去掉）
+```
+
+`auth-binding-key.v1` 只用于认证快照的 HMAC 绑定，不是快照密钥，别拿它去解
+`auth-snapshot.json`。反代缓存 SID 2 分钟；上游 401 时强制重读再试一次。
+
+**注意：**
+
+- **只读**：只支持 GET，POST/PUT 一律 405；不签到、不消费、不改账号。
+- **有真实总额**：`bonus_summary.total_value + purchased_summary.total_value` 当分母，
+  能画进度条；`buckets` 按到期时间排序，快过期的排前面。
+- **没有逐模型倍率**：`multipliers` 是空对象，显示端报「上游没有公开倍率」。
+- **没有对话**：`/v1/models` 与 `/v1/chat/completions` 返回 501，且 router 不写模型 provider。
+- **智点在桌面端做任务领取**，反代与 credits 插件都只读。
+- opencode/pi 的 credits 插件已接入灵犀：显示 `Lingxi 1897/1900 100%`，
+  列出 4 个赠送智点包与最近到期时间。
+
 ## Qoder
 
 ```bash

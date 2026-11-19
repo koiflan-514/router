@@ -3,12 +3,14 @@
 把 Qoder、Trae、WorkBuddy、CodeArts、ZCode、Loomy、商汤小浣熊、千问办公、百度搭子的订阅额度路由到 pi 与 opencode。
 本目录两件事：**反代进程控制器**（`router.mjs`）+ **踩过的坑与判断依据**（`docs/`）。
 provider 接入的实现代码已经整合到 `integrations/`（qodbuddy2pi、traework2api、
-codearts2api、zcode-bridge、loomy2api、raccoon2api、qwenwork2api、dumate2api），本目录是一个单独的 git 仓库。第三方来源与许可见
+codearts2api、zcode-bridge、loomy2api、raccoon2api、qwenwork2api、dumate2api；
+另有一家**只接积分**的 lingxi2api），本目录是一个单独的 git 仓库。第三方来源与许可见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-`router.mjs` 现在**直接启动、停止、重启、探活全部十家反代**：Qoder、WorkBuddy、
+`router.mjs` 现在**直接启动、停止、重启、探活全部十家反代**，外加一家纯积分来源：Qoder、WorkBuddy、
 Trae、CodeArts、ZCode、Loomy、商汤小浣熊、千问办公、百度搭子都归它管，不再依赖各家的安装脚本来拉起进程。PID、日志与端口清理由
-router 自己维护（见 [docs/09-lifecycle.md](docs/09-lifecycle.md)）。
+router 自己维护（见 [docs/09-lifecycle.md](docs/09-lifecycle.md)）。WPS 灵犀（`lingxi`）只接智点查询，
+由 router 托管进程但不写模型 provider，详见 [integrations/lingxi2api](integrations/lingxi2api/README.md)。
 
 ```
 本地客户端 / 官方 openapi         本机路由层                消费端
@@ -22,14 +24,16 @@ Loomy (讯飞 iModel)        ──► loomy-proxy    :8791 ──► pi / openc
 商汤小浣熊 (OpenAI 兼容)    ──► raccoon-proxy  :8793 ──► pi / opencode
 千问办公 (OpenAI+Anthropic) ──► qwenwork-proxy :8794 ──► pi / opencode
 百度搭子 (OpenAI 兼容)      ──► dumate-proxy   :8795 ──► pi / opencode
+WPS 灵犀 (仅积分，无对话)    ──► lingxi-proxy   :8796 ──► credits 插件
                                      ▲
                                      │ 可选：统一网关（:8785）把上面十家拼成
                                      │ 一个端口 + 双协议 + 跨供应商转移
                              router-gateway ──► Claude Code / opencode / pi
 ```
 
-十家反代各自有端口，客户端可以直接连（上文那种用法），也可以连**统一网关**：
+十家模型反代各自有端口，客户端可以直接连（上文那种用法），也可以连**统一网关**：
 一个 baseURL、模型名带供应商前缀、某家挂了自动换家。网关是叠加层，不替代任何一家。
+WPS 灵犀不在网关里——上游没有可直达的 OpenAI 兼容对话入口，它只暴露积分查询。
 
 ## 目录
 
@@ -38,7 +42,7 @@ Loomy (讯飞 iModel)        ──► loomy-proxy    :8791 ──► pi / openc
 | **[router.mjs](router.mjs)** | **统一启停：`up` / `down` / `restart` / `logs`；`on` / `off` / `all` / `none` 三处一起改** |
 | **[gateway/](gateway/README.md)** | **统一网关：一个端口 + Anthropic/OpenAI 双协议 + `<供应商>/<模型>` 路由 + 跨供应商故障转移 + 密钥与用量** |
 | **[gateway/free-providers.mjs](gateway/free-providers.mjs)** | **18 家免费供应商：3 家本机免账号（Ollama/LM Studio/llama.cpp）+ 15 家有免费额度（需 key）** |
-| [integrations/](integrations/) | **整合进来的反代源码 + 本仓库自写的 Loomy / 小浣熊 / 千问办公 / 百度搭子代理 + 本地二进制/凭证说明** |
+| [integrations/](integrations/) | **整合进来的反代源码 + 本仓库自写的 Loomy / 小浣熊 / 千问办公 / 百度搭子代理 + 纯积分的 WPS 灵犀 + 本地二进制/凭证说明** |
 | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | 第三方来源、commit、许可证与二进制分发限制 |
 | [docs/09-lifecycle.md](docs/09-lifecycle.md) | **反代进程生命周期：PID、日志、端口清理、登录自启** |
 | [docs/07-selective.md](docs/07-selective.md) | 选择性启停的原理与三个坑 |
@@ -90,6 +94,8 @@ node router.mjs login qwenwork   # 拉起千问办公桌面端，登录后发一
 node router.mjs up qwenwork      # 启动千问办公反代（:8794）
 node router.mjs login dumate     # 拉起百度搭子桌面端并等它写回登录态
 node router.mjs up dumate        # 启动百度搭子反代（:8795）
+node router.mjs up lingxi        # 启动 WPS 灵犀积分反代（:8796，只积分无对话）
+curl -s http://127.0.0.1:8796/v1/quota    # 查灵犀智点余额
 node router.mjs sync             # 让 opencode 的 provider 与开关一致
 node router.mjs models           # 按上游 /v1/models 刷新 opencode 的模型清单
 node scripts/pi-models.mjs       # 让 pi 的 models.json 跟上：十家反代 + router-gateway + 免费供应商
@@ -232,7 +238,7 @@ CodeArts 已单独验证 `/v1/models` 与 opencode 写入。跑全量前先 `nod
 
 | 能力 | 命令 | 说明 |
 |---|---|---|
-| 启停 | `up` / `down` / `restart` | 十家统一走 spawn；带 `id` 只动这几家 |
+| 启停 | `up` / `down` / `restart` | 十家模型反代 + 纯积分的灵犀统一走 spawn；带 `id` 只动这几家 |
 | 浏览器登录 | `login [id...] [--force]` | 缺凭证时打开浏览器；交互式 `up/all` 默认自动尝试 |
 | 看状态 | `list` / `status` | 开关、端口、PID、登录态、opencode、模型数 |
 | 账号切换 | `account [id] [账号]` | 列出/切换 WorkBuddy、CodeArts、Trae 的账号；`--all` 恢复整池、`--dry-run` 只预览 |
@@ -397,6 +403,7 @@ git diff --cached --stat
 | 商汤小浣熊 | `raccoon` | 8793 | ✓ 10 | ✓ 10 | 本仓库自写反代；读桌面端 IAM token，上游本来就吐 OpenAI |
 | 千问办公 | `qwenwork` | 8794 | ✓ 13 | ✓ 13 | 本仓库自写反代；解 Electron OSCrypt 读 MaaS key 并自续期，原生双方言 |
 | 百度搭子 | `dumate` | 8795 | ✓ 23 | ✓ 23 | 本仓库自写反代；main-server 端口每次启动随机，模型目录读桌面端落盘的 opencode.json |
+| WPS 灵犀 | `lingxi` | 8796 | — | — | **只接积分，无对话**；从 Electron cookie 库解 wps_sid 读智点余额，不写模型 provider |
 | 统一网关 | `router-gateway` | 8785 | ✓ 160 | ✓ 160 | 十家并集 + combo；由 `gateway install` 写入 |
 
 实时状态跑 `node scripts/health.mjs`。

@@ -887,6 +887,90 @@ async function dumateCredits() {
   };
 }
 
+// ---------------------------------------------------------------- WPS 灵犀
+
+/**
+ * WPS 灵犀的「智点」余额在本仓库自写的反代 lingxi-proxy 里（:8796）：
+ *   GET /v1/quota → balance { remaining, total, used } + wallet + buckets[]
+ *
+ * **这家只接积分，不接对话**：上游没有可直达的 OpenAI 兼容入口
+ * （agent-runtime/chat/completions 对任何 body 都回 400，也没有模型清单接口），
+ * 所以反代刻意不提供 /v1/models，router 里也不占模型 provider 位。
+ *
+ * 与 Loomy/小浣熊不同，这家有真实发放总量，能画进度条。智点在桌面端做任务领取。
+ */
+const LINGXI = {
+  provider: 'lingxi',
+  title: 'WPS 灵犀（智点）',
+  port: 8796,
+};
+
+async function lingxiCredits() {
+  const base = `http://127.0.0.1:${LINGXI.port}`;
+  const quota = await getJson(`${base}/v1/quota`);
+  if (quota.status === 0) {
+    return {
+      provider: LINGXI.provider,
+      title: LINGXI.title,
+      available: false,
+      kind: 'lingxi',
+      reason: `本机 WPS 灵犀反代未运行（127.0.0.1:${LINGXI.port}）`,
+    };
+  }
+
+  const q = quota.json || {};
+  if (!quota.ok || q.ok !== true) {
+    const message = (q.error && q.error.message) || `额度接口返回 ${quota.status || quota.error || '错误'}`;
+    return {
+      provider: LINGXI.provider,
+      title: LINGXI.title,
+      available: false,
+      kind: 'lingxi',
+      reason: message,
+    };
+  }
+
+  const wallet = q.wallet || {};
+  const balance = q.balance || {};
+  const available = Number(wallet.available ?? balance.remaining ?? 0);
+  const total = Number(wallet.granted ?? balance.total ?? 0);
+  const used = Number(wallet.consumed ?? balance.used ?? 0);
+  const user = q.user || {};
+  const packs = Array.isArray(q.buckets) ? q.buckets : [];
+  const expiring = packs
+    .map((b) => (b.expireAt ? new Date(b.expireAt).getTime() : NaN))
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b)[0];
+
+  const detail = ['仅积分查询（上游无 OpenAI 兼容对话入口）'];
+  if (Number(wallet.bonus) > 0) detail.push(`赠送 ${wallet.bonus}`);
+  if (Number(wallet.purchased) > 0) detail.push(`购买 ${wallet.purchased}`);
+  if (packs.length > 1) detail.push(`${packs.length} 个智点包`);
+  if (q.subscription && q.subscription.name) detail.push(`订阅 ${q.subscription.name}`);
+
+  return {
+    provider: LINGXI.provider,
+    title: LINGXI.title,
+    available: true,
+    kind: 'lingxi',
+    baseUrl: base,
+    fetchedAt: q.fetchedAt,
+    account: user.name || user.id || undefined,
+    buckets: [
+      {
+        label: '可用智点',
+        total,
+        used,
+        remaining: available,
+        unit: 'credits',
+        ...(expiring ? { expiresAt: expiring } : {}),
+      },
+    ],
+    detail,
+    multipliers: null,
+  };
+}
+
 // ---------------------------------------------------------------- 汇总
 
 /**
@@ -911,6 +995,7 @@ async function collectAll({ only = null } = {}) {
   if (wanted('raccoon')) tasks.push(raccoonCredits());
   if (wanted('qwenwork')) tasks.push(qwenworkCredits());
   if (wanted('dumate')) tasks.push(dumateCredits());
+  if (wanted('lingxi')) tasks.push(lingxiCredits());
   const results = await Promise.all(tasks);
   return results;
 }
@@ -1058,6 +1143,25 @@ function renderText(rows, { width = 60 } = {}) {
       lines.push('  积分在百度搭子桌面端签到/购买，插件不自动签');
       continue;
     }
+    if (row.kind === 'lingxi') {
+      const b = (row.buckets || [])[0] || {};
+      const pct = b.total > 0 ? Math.round((b.remaining / b.total) * 100) : null;
+      const bits = [
+        `剩 ${fmtNum(b.remaining)}`,
+        b.total ? `共 ${fmtNum(b.total)}` : null,
+        pct !== null ? `${pct}%` : null,
+      ].filter(Boolean);
+      const meta = [row.account ? `账号 ${row.account}` : null, ...(row.detail || [])].filter(Boolean).join(' · ');
+      lines.push(`${head} ${bits.join(' / ')}${meta ? `　（${meta}）` : ''}`);
+      if (b.expiresAt) {
+        const when = new Date(b.expiresAt);
+        if (!Number.isNaN(when.getTime())) {
+          lines.push(`  最近到期 ${when.toISOString().slice(0, 16).replace('T', ' ')} UTC`);
+        }
+      }
+      lines.push('  智点在 WPS 灵犀桌面端做任务领取，插件不自动签');
+      continue;
+    }
     if (row.kind === 'zcode') {
       const parts = (row.buckets || []).map(
         (b) => `${b.label} ${fmtNum(b.remaining)}/${fmtNum(b.total)} ${b.unit}`,
@@ -1134,6 +1238,7 @@ module.exports = {
   raccoonCredits,
   qwenworkCredits,
   dumateCredits,
+  lingxiCredits,
   ZCODE,
   LOOMY,
   RACCOON,

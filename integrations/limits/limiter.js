@@ -75,6 +75,8 @@ const HARD_CAPS = {
   qwenwork: { concurrency: 2 },
   // 百度搭子：订阅积分，桌面端与反代共用同一份额度
   dumate: { concurrency: 2 },
+  // WPS 灵犀：只接积分查询（只读 GET），并发 1 足够，不占对话额度
+  lingxi: { concurrency: 1 },
 };
 
 /** 每家的默认档位：越脆的上游越保守。 */
@@ -90,6 +92,7 @@ const DEFAULT_TIER = {
   raccoon: 'balanced',
   qwenwork: 'balanced',
   dumate: 'balanced',
+  lingxi: 'safe',
 };
 
 /** 自由供应商（云端 key）：按「普通 API 的礼貌用量」给一档，别把免费额度刷成风控。 */

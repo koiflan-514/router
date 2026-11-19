@@ -143,7 +143,14 @@ function readSlice(file, maxBytes, where) {
 const LOG_WINDOW_BYTES = 1024 * 1024;
 const LOG_MAX_BYTES = 64 * 1024 * 1024;
 
-/** 在日志里找最后一次匹配（多个 pattern 一起比 index，取最靠后的那条）。 */
+/**
+ * 在日志里找「全局最后一次」匹配。
+ *
+ * 坑：head/tail 两个窗口里的 m.index 是相对各自窗口的偏移，直接比较会得出错误结论
+ * （head 里最早的匹配 index 也可能大于 tail 里较新的匹配）。所以窗口查找只用来快速
+ * 命中「tail 最近一次启动」这个常见情况；一旦 head 也命中，必须读整份（≤64MB）
+ * 确认真正的全局最后一条——桌面端跑久了，最新端口行会落进 head/tail 之间的盲区。
+ */
 function lastLogMatch(file, patterns) {
   const pick = (text) => {
     let best = null;
@@ -154,14 +161,16 @@ function lastLogMatch(file, patterns) {
     }
     return best;
   };
-  let hit = pick(readTail(file, LOG_WINDOW_BYTES));
-  if (hit) return hit;
-  hit = pick(readHead(file, LOG_WINDOW_BYTES));
-  if (hit) return hit;
+  const tailHit = pick(readTail(file, LOG_WINDOW_BYTES));
+  const headHit = pick(readHead(file, LOG_WINDOW_BYTES));
+  if (tailHit && !headHit) return tailHit;
+  // head 也命中（或 tail 没命中）→ 窗口不可靠，读整份定夺。
   try {
-    if (fs.statSync(file).size <= LOG_MAX_BYTES) return pick(fs.readFileSync(file, 'utf8'));
+    if (fs.statSync(file).size <= LOG_MAX_BYTES) {
+      return pick(fs.readFileSync(file, 'utf8')) || tailHit || headHit;
+    }
   } catch {}
-  return null;
+  return tailHit || headHit;
 }
 
 function maskId(id) {

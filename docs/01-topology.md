@@ -19,6 +19,7 @@
 │   │ 小浣熊: raccoon-proxy :8793            │
 │   │ 千问办公: qwenwork-proxy :8794         │
 │   │ 百度搭子: dumate-proxy :8795           │
+│   │ WPS 灵犀: lingxi-proxy :8796（仅积分） │
 └───────────┬─────────────┘   └───────────────┬───────────────────────┘
             │                                 │
 ┌───────────▼─────────────┐   ┌───────────────▼───────────────────────┐
@@ -54,6 +55,7 @@ OpenAI 格式。**判断新供应商要不要写代理：看它是否说 OpenAI�
 | 8793 | raccoon-proxy.js | `router.mjs up raccoon` | `/health`, `/v1/*`, `/v1/quota` |
 | 8794 | qwenwork-proxy.js | `router.mjs up qwenwork` | `/health`, `/v1/*`, `/v1/quota` |
 | 8795 | dumate-proxy.js | `router.mjs up dumate` | `/health`, `/v1/*`, `/v1/quota` |
+| 8796 | lingxi-proxy.js | `router.mjs up lingxi` | `/health`, `/v1/quota`, `/v1/usage`（**只读，无对话**） |
 | 10087 | codearts2api | `router.mjs up codearts` | `/v1/*`, `/admin` |
 | 8785 | gateway/server.mjs | `router.mjs gateway up` | `/v1/*`, `/v1/gateway/*`（**叠加层，可选**） |
 
@@ -75,6 +77,7 @@ OpenAI 格式。**判断新供应商要不要写代理：看它是否说 OpenAI�
 | 商汤小浣熊 | `~/.office-raccoon/agent/config/auth.json` | `access_token`（IAM JWT，30 天）+ `office_identity`；旧版在 `~/.box-agent/config/auth.json` |
 | 千问办公 | `~/.qwenworkcn/engine-maas-key.dat` | MaaS key（`sk-mm-v1.…`），Chromium OSCrypt(`v10`) 加密；主密钥在 `%APPDATA%/QwenWorkCN/Local State` 的 `os_crypt.encrypted_key`（DPAPI）。反代自己 exchange 续期 |
 | 百度搭子 | `%APPDATA%\qianfan-desktop-app\auth.json` | `activeProfileId` + `accountProfiles[].bceUserId/displayName`；桌面端写入，反代只读。main-server 的 in-app key 只在 `log\electron.log` 里 |
+| WPS 灵犀 | `%APPDATA%\WPS 灵犀\Partitions\lingxi-passport-v2-*\Network\Cookies` | `wps_sid` 在 cookie 库里（**不在** `auth.json`，那份是 runtime）；DPAPI 主密钥（`Local State`）+ AES-256-GCM 解出 |
 
 **关键点：Qoder 的 auth.json 是 pi 与 opencode 共用的。** 代理读同一份文件，所以
 在 pi 里登录一次，两边都能用；代理刷新后会写回，pi 也跟着受益。
