@@ -1,13 +1,21 @@
 #!/usr/bin/env node
 /**
- * pi-models.mjs — 把本机六家反代写进 pi 的 `~/.pi/agent/models.json`。
+ * pi-models.mjs — 把 router 的全部上游写进 pi 的 `~/.pi/agent/models.json`。
  *
- * router.mjs 只负责 opencode.json（`router sync`），pi 那边一直是手工维护的。
- * 这个脚本补上那一半：从各家正在运行的 `/v1/models` 拉实时清单，连同
- * 鉴权 key 与 compat 设置一起写进 pi，`TokenPlus` 等别的 provider 原样保留。
+ * router.mjs 管 opencode.json（`router sync`），pi 侧靠这个脚本 + 网关/免费供应商
+ * 那两个入口。三处共用 `scripts/lib/pi-sync.mjs` 落盘（写前备份、内容没变就不写）。
  *
- *   node scripts/pi-models.mjs              # 全部（只写当前能连上的）
- *   node scripts/pi-models.mjs trae-local   # 只写一家
+ * 覆盖三层：
+ *   1. 本机七家反代（trae-local / codearts / zcode / loomy / raccoon / qwenwork / dumate）
+ *      从各自 `/v1/models` 拉实时清单，连同鉴权 key 与 compat 一起写；
+ *   2. `router-gateway`：一个 baseURL（:8785），模型名 `<供应商>/<模型>` + combo 虚拟模型；
+ *   3. 免费供应商（18 家里有 key / 本机免账号的那些）：每家一个直连 provider。
+ *
+ *   node scripts/pi-models.mjs              # 全部（只写当前能连上 / 配好 key 的）
+ *   node scripts/pi-models.mjs trae-local   # 只写一家本机反代
+ *   node scripts/pi-models.mjs gateway      # 只写统一网关
+ *   node scripts/pi-models.mjs free         # 只写免费供应商
+ *   node scripts/pi-models.mjs openrouter   # 只写某家免费供应商
  *   node scripts/pi-models.mjs --dry-run    # 只打印，不落盘
  *
  * 四家不写进 models.json，交给 pi 扩展：
@@ -16,21 +24,26 @@
  *   `workbuddy` / `workbuddy-global` → 扩展 workbuddy.ts。
  *     反代的 /v1/models 是包作者猜的静态表，服务端会回 11102 service info not
  *     found；扩展读的是桌面端落盘的产品配置，那份才是真实可用集。
- * 剩下 `trae-local`、`codearts` 没有扩展，才需要这个脚本。
+ * 剩下 `trae-local`、`codearts`、`zcode`、`loomy`、`raccoon`、`qwenwork`、`dumate` 没有扩展，
+ * 才走本脚本。
  *
- * 只读各家反代，只写 pi 的 models.json（写前备份到 models.backups/）。
+ * 只读各家的 `/v1/models`，只写 pi 的 models.json（写前备份到 models.backups/）。
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  PI_MODELS_FILE,
+  mergePiProviders,
+  gatewayPiProvider,
+  gatewayCombos,
+  freePiProviders,
+} from './lib/pi-sync.mjs';
+import { FREE_PROVIDERS } from '../gateway/free-providers.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
-const HOME = os.homedir();
-const MODELS_FILE = path.join(HOME, '.pi', 'agent', 'models.json');
-const BACKUP_DIR = path.join(HOME, '.pi', 'agent', 'models.backups');
 const TRAE_ENV = path.join(ROOT, 'integrations', 'traework2api', '.env.local');
 const CODEARTS_DATA = path.join(ROOT, 'integrations', 'codearts2api', 'codearts2api-data.json');
 
@@ -69,7 +82,7 @@ function codeartsKey() {
 }
 
 /**
- * 六家的接入参数。`apiKey` 是 pi 侧要带的 Bearer：
+ * 各家的接入参数。`apiKey` 是 pi 侧要带的 Bearer：
  * Qoder 代理不校验入站 key，WorkBuddy 反代也只当占位；Trae/CodeArts 真校验。
  */
 function sources() {
@@ -127,6 +140,46 @@ function sources() {
       map: mapWorkBuddy,
       nativeExtension: 'workbuddy.ts',
     },
+    {
+      id: 'zcode',
+      port: 20131,
+      name: 'ZCode（Z.ai）',
+      apiKey: 'zcode-local',
+      map: mapZcode,
+    },
+    {
+      id: 'loomy',
+      port: 8791,
+      name: 'Loomy（讯飞）',
+      // 反代不校验入站 key，但 pi 的 OpenAI 兼容层要求非空
+      apiKey: 'loomy-local',
+      map: mapLoomy,
+      // 上游 /models 也列生图模型；这些不能走 chat/completions
+      modelsPath: '/models?type=chat',
+    },
+    {
+      id: 'raccoon',
+      port: 8793,
+      name: '商汤小浣熊',
+      // 反代不校验入站 key，但 pi 的 OpenAI 兼容层要求非空
+      apiKey: 'raccoon-local',
+      map: mapRaccoon,
+    },
+    {
+      id: 'qwenwork',
+      port: 8794,
+      name: '千问办公',
+      apiKey: 'qwenwork-local',
+      map: mapQwenwork,
+    },
+    {
+      id: 'dumate',
+      port: 8795,
+      name: '百度搭子',
+      // 反代不校验入站 key，但 pi 的 OpenAI 兼容层要求非空
+      apiKey: 'dumate-local',
+      map: mapDumate,
+    },
   ];
 }
 
@@ -183,10 +236,74 @@ function mapTrae(raw) {
   });
 }
 
+/**
+ * zcode-bridge 的 /v1/models 是标准 OpenAI 形状，只带 id；
+ * 上下文长度它不返回，交给 pi 的默认值。
+ */
+function mapZcode(raw) {
+  return modelEntry(raw.id || raw.slug, raw.id || raw.slug, {});
+}
+
+/** Loomy 的 /models 是扩展 OpenAI 形状：context_length / max_output_tokens / capabilities。 */
+function mapLoomy(raw) {
+  const caps = raw.capabilities || {};
+  const input = Array.isArray(caps.input_modalities) ? caps.input_modalities : ['text'];
+  // pi 的 models.json schema 目前只接受 text / image；audio / video 会让整份配置校验失败。
+  const modalities = [...new Set(['text', ...input.filter((m) => m === 'image')])];
+  return modelEntry(raw.id, raw.name || raw.id, {
+    input: modalities,
+    reasoning: caps.reasoning === true ? true : undefined,
+    contextWindow: POSITIVE(raw.context_length),
+    maxTokens: POSITIVE(raw.max_output_tokens),
+  });
+}
+
+/**
+ * 千问办公的 /v1/models 与上面的扩展形状一致（context_window / max_output_tokens /
+ * capabilities），另外带 `promotion`（限时折扣标签）。
+ */
+function mapQwenwork(raw) {
+  const caps = raw.capabilities || {};
+  const input = ['text'];
+  if (caps.vision === true) input.push('image');
+  return modelEntry(raw.id, raw.name || raw.id, {
+    input,
+    reasoning: caps.reasoning === true ? true : undefined,
+    contextWindow: POSITIVE(raw.context_window),
+    maxTokens: POSITIVE(raw.max_output_tokens),
+  });
+}
+
+/**
+ * 百度搭子的 /v1/models 与 Loomy 同形状：
+ * context_length / max_output_tokens / capabilities{vision,input_modalities}。
+ * 代理已经滤掉内部模型，并且只保留 text/image 两种输入模态。
+ */
+function mapDumate(raw) {
+  return mapLoomy(raw);
+}
+
+/**
+ * 小浣熊的 /v1/models 是 OpenAI 形状加一组扩展字段：
+ * context_window / max_output_tokens / capabilities{vision,reasoning}。
+ * 它自己的模型名（Raccoon-Work、GLM-5-3…）比 id 好认，优先用 name。
+ */
+function mapRaccoon(raw) {
+  const caps = raw.capabilities || {};
+  const input = ['text'];
+  if (caps.vision === true) input.push('image');
+  return modelEntry(raw.id, raw.name || raw.id, {
+    input,
+    reasoning: caps.reasoning === true ? true : undefined,
+    contextWindow: POSITIVE(raw.context_window),
+    maxTokens: POSITIVE(raw.max_output_tokens),
+  });
+}
+
 async function fetchModels(src, timeout = 8000) {
   const headers = src.apiKey ? { Authorization: `Bearer ${src.apiKey}` } : {};
   try {
-    const res = await fetch(`http://127.0.0.1:${src.port}/v1/models`, {
+    const res = await fetch(`http://127.0.0.1:${src.port}/v1${src.modelsPath || '/models'}`, {
       headers,
       signal: AbortSignal.timeout(timeout),
     });
@@ -199,52 +316,57 @@ async function fetchModels(src, timeout = 8000) {
   }
 }
 
-function readModelsFile() {
-  try {
-    return JSON.parse(fs.readFileSync(MODELS_FILE, 'utf8'));
-  } catch {
-    return { providers: {} };
-  }
-}
-
-function backup(file) {
-  try {
-    if (!fs.existsSync(file)) return null;
-    fs.mkdirSync(BACKUP_DIR, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const dest = path.join(BACKUP_DIR, `models-${stamp}.json`);
-    fs.copyFileSync(file, dest);
-    return dest;
-  } catch {
-    return null;
-  }
-}
 
 async function main() {
   const argv = process.argv.slice(2);
   const dryRun = argv.includes('--dry-run');
   const wanted = argv.filter((a) => !a.startsWith('--'));
+  const freeIds = FREE_PROVIDERS.map((p) => p.id);
 
-  let all = sources();
+  const local = sources();
+  let picked = local;
+  let wantGateway = true;
+  let wantFree = true;
+  let freeWanted = null;
+
   if (wanted.length) {
-    const picked = [];
+    picked = [];
+    wantGateway = false;
+    wantFree = false;
+    freeWanted = [];
+    const unknown = [];
     for (const arg of wanted) {
-      const hits = all.filter((s) => s.id === arg || s.id.startsWith(arg));
-      if (!hits.length) {
-        say(`${C.bad} 未知供应商：${arg}（可选：${all.map((s) => s.id).join('、')}）`);
-        process.exit(1);
+      if (arg === 'gateway' || arg === 'router-gateway') {
+        wantGateway = true;
+        continue;
       }
-      picked.push(...hits);
+      if (arg === 'free' || arg === 'providers') {
+        wantFree = true;
+        continue;
+      }
+      const hits = local.filter((s) => s.id === arg || s.id.startsWith(arg));
+      if (hits.length) {
+        picked.push(...hits);
+        continue;
+      }
+      const freeHits = freeIds.filter((id) => id === arg || id.startsWith(arg));
+      if (freeHits.length) {
+        freeWanted.push(...freeHits);
+        continue;
+      }
+      unknown.push(arg);
     }
-    all = picked;
+    if (unknown.length) {
+      say(`${C.bad} 未知供应商：${unknown.join('、')}`);
+      say(`${C.dim}  可选：${local.map((s) => s.id).join('、')}、gateway、free、${freeIds.join('、')}${C.reset}`);
+      process.exit(1);
+    }
   }
 
-  const cfg = readModelsFile();
-  cfg.providers = cfg.providers || {};
-
-  let wrote = 0;
+  const providers = [];
   const failed = [];
-  for (const src of all) {
+
+  for (const src of picked) {
     if (src.nativeExtension && !wanted.includes(src.id)) {
       say(`${C.dim}· ${src.name} ${src.id} 跳过：pi 由扩展 ${src.nativeExtension} 直连${C.reset}`);
       continue;
@@ -272,35 +394,53 @@ async function main() {
       models,
     };
     if (src.apiKey) provider.apiKey = src.apiKey;
-
-    if (dryRun) {
-      say(`${C.dim}${src.id}: ${models.length} 个模型 → ${provider.baseUrl}`);
-      continue;
-    }
-    // 覆盖同名 provider，别的 provider 与其字段（TokenPlus、$schema…）保持不动
-    cfg.providers[src.id] = provider;
-    wrote++;
+    providers.push({ id: src.id, ...provider });
     say(`${C.ok} ${src.name} ${C.dim}${src.id}${C.reset} ${models.length} 个模型 → ${provider.baseUrl}`);
+  }
+
+  if (wantGateway) {
+    const combos = await gatewayCombos();
+    const provider = await gatewayPiProvider({ combos });
+    if (!provider.models.length) {
+      failed.push({ src: { name: '统一网关', id: 'router-gateway' }, error: '十家与免费供应商都没在跑' });
+    } else {
+      providers.push(provider);
+      const note = combos.length ? `，含 ${combos.length} 条 combo` : '';
+      say(`${C.ok} 统一网关 ${C.dim}${provider.id}${C.reset} ${provider.models.length} 个模型${note} → ${provider.baseUrl}`);
+    }
+  }
+
+  if (wantFree || (freeWanted && freeWanted.length)) {
+    const ids = freeWanted && freeWanted.length ? freeWanted : undefined;
+    const { providers: free, skipped } = await freePiProviders({ ids });
+    for (const p of free) {
+      providers.push(p);
+      say(`${C.ok} ${p.name} ${C.dim}${p.id}${C.reset} ${p.models.length} 个模型 → ${p.baseUrl}`);
+    }
+    for (const s of skipped) failed.push({ src: { name: s.id, id: s.id }, error: s.reason });
   }
 
   for (const f of failed) {
     say(`${C.warn} ${f.src.name} ${C.dim}${f.src.id}${C.reset} 跳过：${f.error}${f.hint ? `（${f.hint}）` : ''}`);
   }
 
-  if (dryRun) {
-    say(`${C.dim}--dry-run：没有写文件${C.reset}`);
-    return;
-  }
-  if (!wrote) {
+  if (!providers.length) {
     say(`${C.bad} 一家都没写成，models.json 保持原样`);
     process.exit(1);
   }
 
-  const dest = backup(MODELS_FILE);
-  fs.mkdirSync(path.dirname(MODELS_FILE), { recursive: true });
-  fs.writeFileSync(MODELS_FILE, `${JSON.stringify(cfg, null, 2)}\n`);
-  say(`${C.ok} 已写 ${MODELS_FILE}${C.dim}（${Object.keys(cfg.providers).join('、')}）${C.reset}`);
-  if (dest) say(`${C.dim}备份：${dest}${C.reset}`);
+  if (dryRun) {
+    say(`${C.dim}--dry-run：没有写文件（将写 ${providers.map((p) => p.id).join('、')}）${C.reset}`);
+    return;
+  }
+
+  const result = mergePiProviders(providers);
+  if (!result.added.length) {
+    say(`${C.dim}${PI_MODELS_FILE} 已是最新（${providers.length} 个 provider 内容没变）${C.reset}`);
+  } else {
+    say(`${C.ok} 已写 ${PI_MODELS_FILE}${C.dim}（改动 ${result.added.map((a) => `${a.id}:${a.models}`).join('、')}）${C.reset}`);
+  }
+  if (result.backup) say(`${C.dim}备份：${result.backup}${C.reset}`);
 }
 
 main().catch((e) => {

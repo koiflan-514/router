@@ -1,0 +1,46 @@
+{
+  "$comment": "本机限额：防止反代把上游当成「有人在套流」。tier 是全局默认档（safe/balanced/fast），providers 里按家覆盖；硬约束（例如 zcode 只能 1 路并发）无法被覆盖，见 integrations/limits/limiter.js 的 HARD_CAPS。字段：concurrency 同时在飞请求、rpm 每分钟请求、minIntervalMs 相邻请求最小间隔、burst 瞬时突发、dailyCap 每日上限（0=不限）。改完执行 node router.mjs limits 看生效值。",
+  "tier": "balanced",
+  "providers": {
+    "qoder-cn": {
+      "tier": "safe"
+    },
+    "qoder": {
+      "tier": "safe"
+    },
+    "trae-local": {
+      "tier": "safe"
+    },
+    "zcode": {
+      "tier": "safe"
+    },
+    "codearts": {
+      "tier": "balanced"
+    },
+    "workbuddy": {
+      "tier": "balanced"
+    },
+    "workbuddy-global": {
+      "tier": "balanced"
+    },
+    "loomy": {
+      "tier": "balanced"
+    },
+    "raccoon": {
+      "tier": "balanced"
+    },
+    "qwenwork": {
+      "tier": "balanced"
+    },
+    "dumate": {
+      "tier": "balanced"
+    }
+  },
+  "free": {
+    "concurrency": 2,
+    "rpm": 30,
+    "minIntervalMs": 1200,
+    "burst": 2,
+    "dailyCap": 0
+  }
+}

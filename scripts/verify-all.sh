@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# verify-all.sh — 五个 provider × 两个客户端全量实测。
+# verify-all.sh — 九个 provider × 两个客户端全量实测（ZCode 未列入默认配对）。
 #
 # 只发极短的请求（"Say only: ok"），成本可忽略；但能覆盖最容易坏的一环：
 # 端到端 → 协议转换 → 凭证 → 模型 id 是否真的存在。
@@ -27,6 +27,9 @@ PAIRS=(
   "trae-local:glm-5.3-flash"
   "workbuddy:deepseek-v4-flash"
   "workbuddy-global:deepseek-v4.1-flash"
+  "loomy:spark-x2.6"
+  "raccoon:sn-glm-5-3-flash"
+  "qwenwork:qwen4-max"
 )
 
 GREEN=$'\033[1;32m'

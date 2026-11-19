@@ -2,7 +2,7 @@
 /**
  * router.mjs — 统一启动、停止、重启、探活本机所有反代。
  *
- * 六家全常驻会同时挂着 7 个子进程（Trae 两段式），而多数时候你只用其中一两个。这里让
+ * 十家全常驻会同时挂着十几个子进程（Trae 两段式），而多数时候你只用其中一两个。这里让
  * 「开哪几个」变成一个显式选择，并且这个选择要落到三处，缺一处就会出现
  * 「以为关了其实还在跑」或「以为开了但客户端看不到」：
  *
@@ -10,7 +10,7 @@
  *   2. pi 的模型可见性     —— provider 注册与模型目录
  *   3. opencode 的 provider —— 写进 opencode.json 的那份
  *
- * 从 2026-11 起，router 直接托管全部六家反代，不再依赖 qoder2pi /
+ * 从 2026-11 起，router 直接托管全部十家反代，不再依赖 qoder2pi /
  * workbuddy2pi 的计划任务来拉起进程（计划任务在本机并不总是可靠）：
  *
  *   - 每家的命令行、环境变量、日志、端口都写在 PROVIDERS 里
@@ -19,8 +19,8 @@
  *     「停了包装进程、子进程还在监听」
  *   - 登录自启用 `service install` 生成 router-<id> 计划任务
  *
- * qoder2pi / workbuddy2pi 仍用于登录、切账号、续期，以及 WorkBuddy 写 opencode
- * 时读取 pi 的模型清单；启动和停止不再经过它们。
+ * qoder2pi / workbuddy2pi 仍用于登录、续期，以及 WorkBuddy 写 opencode 时读取
+ * pi 的模型清单；账号切换已收进 `router account`，启动和停止也不再经过它们。
  *
  * 用法：
  *   node router.mjs list                 看各家状态与开关
@@ -28,11 +28,13 @@
  *   node router.mjs down / stop          停止（不带 id 时停全部）
  *   node router.mjs restart [id...]      重启
  *   node router.mjs logs <id> [行数]     看日志尾部
+ *   node router.mjs account [id] [账号]  查看 / 切换账号
  *   node router.mjs on qoder-cn trae     只开这两家（其余关掉）
  *   node router.mjs off workbuddy        额外关掉某几家
  *   node router.mjs all / none           全开 / 全关
  *   node router.mjs reload               改完选择后重放一次（down + up）
  *   node router.mjs service ...          登录自启（Windows 计划任务）
+ *   node router.mjs sync-homes [--status] 双系统账号/配置同步
  *   node router.mjs doctor               自检
  */
 
@@ -40,12 +42,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 // 本文件是 ESM（.mjs），而 E:\qodbuddy2pi 里的共享模块是 CommonJS，
 // 所以 require 要经由 createRequire 拿回来——同一套加载器不能混用。
 const require = createRequire(import.meta.url);
+const qwenworkCredentials = require('./integrations/qwenwork2api/credentials.js');
 
 const WIN = process.platform === 'win32';
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
@@ -70,6 +73,31 @@ const TRAE_DIR =
   localOr(path.join(INTEGRATIONS_DIR, 'traework2api'), 'E:\\trae-free-credits\\1-traework2api');
 const CODEARTS_DIR =
   process.env.ROUTER_CODEARTS_DIR || localOr(path.join(INTEGRATIONS_DIR, 'codearts2api'), path.join(HOME, 'codearts2api'));
+// ZCode（Z.ai 的编程工作台）额度反代：azrinaldi/zcode-bridge（MIT，Go 标准库单二进制）
+const ZCODE_DIR =
+  process.env.ROUTER_ZCODE_DIR || localOr(path.join(INTEGRATIONS_DIR, 'zcode-bridge'), path.join(HOME, 'zcode-bridge'));
+const ZCODE_ACCOUNTS_FILE =
+  process.env.ZCODE_ACCOUNTS_FILE || path.join(ZCODE_DIR, 'data', 'accounts.json');
+// Loomy（讯飞）反代：本仓库自写，零依赖 Node 脚本，读桌面端登录态并转成 OpenAI 兼容端点。
+const LOOMY_DIR =
+  process.env.ROUTER_LOOMY_DIR || path.join(INTEGRATIONS_DIR, 'loomy2api');
+// 商汤小浣熊（Raccoon Work）反代：同样是本仓库自写，零依赖 Node。上游本来就
+// 说 OpenAI，代理只补 IAM 鉴权、模型目录与积分。
+const RACCOON_DIR =
+  process.env.ROUTER_RACCOON_DIR || path.join(INTEGRATIONS_DIR, 'raccoon2api');
+// 千问办公（QwenWork CN）反代：本仓库自写。上游原生支持 OpenAI 与 Anthropic 两种方言，
+// 代理主要解决「凭据在 Electron 的 OSCrypt 容器里」这一层。
+const QWENWORK_DIR =
+  process.env.ROUTER_QWENWORK_DIR || path.join(INTEGRATIONS_DIR, 'qwenwork2api');
+// 百度搭子（DuMate）反代：本仓库自写。桌面端的 main-server 端口每次启动随机，
+// 代理自动发现端口、读桌面端落盘的模型目录，并复用其免鉴权的 qianfanproxy。
+const DUMATE_DIR =
+  process.env.ROUTER_DUMATE_DIR || path.join(INTEGRATIONS_DIR, 'dumate2api');
+
+// 统一网关：把上面十家拼成一个端口、两种方言。它不是「第十一家反代」，而是前面的一层，
+// 所以端口单独留一个（默认 8785，不占用任何一家的端口段）。
+const GATEWAY_DIR = path.join(HERE, 'gateway');
+const GATEWAY_PORT = Number(process.env.ROUTER_GATEWAY_PORT || 8785);
 
 // 登录态的文件位置。只读/只写这些文件，不通过日志或表格输出 token。
 const PI_AUTH_FILE = path.join(HOME, '.pi', 'agent', 'auth.json');
@@ -78,6 +106,13 @@ const WORKBUDDY_LIVE_FILES = {
   workbuddy: path.join(HOME, '.codebuddy-session.json'),
   'workbuddy-global': path.join(HOME, '.codebuddy-global-session.json'),
 };
+// WorkBuddy 的账号池：每个 slot 一份凭证，生效文件是上面那两个（复制式切换，不是软链）
+const WORKBUDDY_SLOT_DIRS = {
+  workbuddy: path.join(HOME, '.workbuddy2api', 'sessions'),
+  'workbuddy-global': path.join(HOME, '.workbuddy2api', 'sessions-global'),
+};
+const TRAE_AUTHS_DIR = path.join(TRAE_DIR, 'auths');
+const TRAE_STATE_FILE = path.join(TRAE_DIR, 'data', 'state.json');
 
 // ---------------------------------------------------------------- 输出
 
@@ -90,7 +125,14 @@ const C = {
   reset: '\x1b[0m',
 };
 
-const say = (...a) => console.log(...a);
+// --json 时切换过程仍会调用 say/ok 等输出函数；先静音并留在缓冲里，
+// 成功只吐一份 JSON，失败则把最后几行放进 messages，方便脚本定位。
+let MUTE_OUTPUT = false;
+const OUTPUT_BUF = [];
+const say = (...a) => {
+  if (MUTE_OUTPUT) OUTPUT_BUF.push(a.join(' '));
+  else console.log(...a);
+};
 const ok = (m) => say(`${C.ok} ${m}`);
 const bad = (m) => say(`${C.bad} ${m}`);
 const warn = (m) => say(`${C.warn} ${m}`);
@@ -125,13 +167,16 @@ function readDotEnv(file) {
 
 /** 优先返回存在的可执行文件；都不存在时返回第一个候选，让报错信息能指出该放到哪。 */
 function resolveExecutable(dir, names) {
-  for (const name of names) {
+  // Windows 的 .exe 在 Linux/macOS 上不可执行：非 Windows 平台跳过它，
+  // 否则仓库里同时放着 tw2api.exe 与 tw2api 时会选错。
+  const usable = WIN ? names : names.filter((name) => !/\.exe$/i.test(name));
+  for (const name of usable) {
     const file = path.join(dir, name);
     try {
       if (fs.statSync(file).isFile()) return file;
     } catch {}
   }
-  return path.join(dir, names[0]);
+  return path.join(dir, usable[0] || names[0]);
 }
 
 /** 从 pi 的 models.json 取该 provider 的 apiKey（反代列表接口常要鉴权）。 */
@@ -153,12 +198,36 @@ function readJsonFile(file) {
   }
 }
 
+/** 统一到期时间单位：兼容 Unix 秒、毫秒与字符串数字。 */
+function normalizeExpiryMs(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 1e12 ? n * 1000 : n;
+}
+
 /** 到期时间只用于提示，不参与「是否已登录」的判断。 */
-function expiryLabel(ms) {
-  const n = Number(ms);
-  if (!Number.isFinite(n) || n <= 0) return '';
-  const days = Math.ceil((n - Date.now()) / 86400000);
-  return days < 0 ? '，已过期' : `，剩 ${days} 天`;
+function expiryLabel(expires) {
+  const ms = normalizeExpiryMs(expires);
+  if (ms === null) return '';
+  // 用毫秒判断过期，别用「剩余天数」：-1.5 小时的 ceil 是 0，会显示成「剩 0 天」而不是已过期。
+  if (ms <= Date.now()) return '，已过期';
+  const days = Math.ceil((ms - Date.now()) / 86400000);
+  return `，剩 ${days} 天`;
+}
+
+/** 给 TUI/脚本用的结构化认证状态；label 仍只用于人类可读输出。 */
+function authResult(ok, label, expires) {
+  if (!ok) return { ok: false, state: 'missing', expiresAt: null, label };
+  const ms = normalizeExpiryMs(expires);
+  if (ms === null) return { ok: true, state: 'unknown', expiresAt: null, label };
+  if (ms <= Date.now()) return { ok: true, state: 'expired', expiresAt: new Date(ms).toISOString(), label };
+  const days = Math.ceil((ms - Date.now()) / 86400000);
+  return {
+    ok: true,
+    state: days < 3 ? 'expiring' : 'valid',
+    expiresAt: new Date(ms).toISOString(),
+    label,
+  };
 }
 
 function shortUser(id) {
@@ -167,16 +236,16 @@ function shortUser(id) {
 
 function qoderAuth(provider) {
   const entry = (readJsonFile(PI_AUTH_FILE) || {})[provider];
-  if (!entry || !entry.access) return { ok: false, label: '未登录（auth.json 里没有 access）' };
-  return { ok: true, label: `已登录（${shortUser(entry.userID)}${expiryLabel(entry.expires)}）` };
+  if (!entry || !entry.access) return authResult(false, '未登录（auth.json 里没有 access）');
+  return authResult(true, `已登录（${shortUser(entry.userID)}${expiryLabel(entry.expires)}）`, entry.expires);
 }
 
 function workbuddyAuth(id) {
   const live = readJsonFile(WORKBUDDY_LIVE_FILES[id]);
   const token = live && live.auth && live.auth.accessToken;
-  if (typeof token !== 'string' || !token) return { ok: false, label: '未登录（无生效凭证）' };
+  if (typeof token !== 'string' || !token) return authResult(false, '未登录（无生效凭证）');
   const who = (live.account && (live.account.nickname || live.account.uid)) || '已登录';
-  return { ok: true, label: `已登录（${who}${expiryLabel(live.auth.expiresAt)}）` };
+  return authResult(true, `已登录（${who}${expiryLabel(live.auth.expiresAt)}）`, live.auth.expiresAt);
 }
 
 function traeAuth() {
@@ -189,19 +258,24 @@ function traeAuth() {
     const d = readJsonFile(path.join(dir, file));
     if (d && d.auth && d.auth.accessToken) {
       const who = (d.account && (d.account.nickname || d.account.uid)) || '已登录';
-      return { ok: true, label: `已登录（${who}${expiryLabel(d.auth.expiresAt)}）` };
+      return authResult(true, `已登录（${who}${expiryLabel(d.auth.expiresAt)}）`, d.auth.expiresAt);
     }
   }
-  return { ok: false, label: '未登录（auths 里没有有效凭证）' };
+  return authResult(false, '未登录（auths 里没有有效凭证）');
 }
 
 function codeartsAuth() {
   const data = readJsonFile(CODEARTS_DATA_FILE);
   const accounts = (data && Array.isArray(data.accounts) && data.accounts) || [];
   const usable = accounts.filter((a) => a && a.enabled !== false && a.session);
-  if (!usable.length) return { ok: false, label: '未登录（账号池为空）' };
+  if (!usable.length) return authResult(false, '未登录（账号池为空）');
   const names = usable.map((a) => a.name || '账号').slice(0, 2).join('、');
-  return { ok: true, label: `已登录（${names}${usable.length > 2 ? ' 等' : ''}）` };
+  return {
+    ok: true,
+    state: 'valid',
+    expiresAt: null,
+    label: `已登录（${names}${usable.length > 2 ? ' 等' : ''}）`,
+  };
 }
 
 function authStatus(p) {
@@ -214,9 +288,1952 @@ function authStatus(p) {
       return traeAuth();
     case 'codearts':
       return codeartsAuth();
+    case 'zcode':
+      return zcodeAuth();
+    case 'loomy':
+      return loomyAuth();
+    case 'raccoon':
+      return raccoonAuth();
+    case 'qwenwork':
+      return qwenworkAuth();
+    case 'dumate':
+      return dumateAuth();
+    case 'gateway':
+      // 网关没有上游凭证：它靠下面几家反代的凭证工作，自己永远是「就绪」。
+      return authResult(true, `聚合 ${PROVIDERS.length - 1} 家反代`);
     default:
-      return { ok: true, label: '未知' };
+      return authResult(true, '未知');
   }
+}
+
+// ---------------------------------------------------------------- 账号切换
+//
+// 十家里有五家的账号可以切换，且生效方式各不相同：
+//
+//   WorkBuddy 国内/国际  ~/.workbuddy2api/sessions{,-global}/<slot>.json 是账号池，
+//                        ~/.codebuddy{,-global}-session.json 是生效凭证。切换 = 把目标
+//                        slot 复制到生效文件；反代只在启动时读它，所以运行中要重启。
+//   CodeArts             codearts2api-data.json 的 accounts[]，网关按 enabled 轮询。
+//                        「切到某个账号」= 只留它一个 enabled；网关在跑时走
+//                        /admin/api/accounts 的 toggle，避免直接改文件被持久化覆盖。
+//   Trae                 auths/trae-<uid>.json 是凭证池，data/state.json 的
+//                        accounts[uid].disabled 决定是否参与调度。切换同样只留一个，
+//                        tw2api 只在启动时读 state，因此要重启。
+//   Qoder                ~/.pi/agent/auth.json 每个区域只有一条凭证，没有多账号池，
+//                        这里只展示当前账号；换号请重新登录。
+//
+// 所有切换都先打印「将要发生什么」，支持 --dry-run；--all 把账号池恢复为全部启用。
+
+/** 原子写 JSON：先写临时文件再改名，避免反代正好读到半截文件。 */
+function writeJsonAtomic(file, data, { mode } = {}) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const text = `${JSON.stringify(data, null, 2)}\n`;
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, text, mode ? { mode } : undefined);
+  if (mode) {
+    try {
+      fs.chmodSync(tmp, mode);
+    } catch {}
+  }
+  try {
+    fs.renameSync(tmp, file);
+  } catch {
+    fs.writeFileSync(file, text, mode ? { mode } : undefined);
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+  }
+}
+
+/** 账号显示名；WorkBuddy 国际版会把 nickname 落成加密对象，只接受字符串。 */
+function accountName(account = {}) {
+  const nick = account.nickname;
+  if (typeof nick === 'string' && nick.trim()) return nick;
+  return account.uin || account.uid || '<未知>';
+}
+
+function shortUid(uid) {
+  const s = String(uid || '');
+  return s.length > 14 ? `${s.slice(0, 14)}…` : s || '?';
+}
+
+function localDay(unixSeconds) {
+  const d = new Date(Number(unixSeconds) * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** 按 access_token 到期时间给一句短说明，不给 token 本身。 */
+function accessNote(expiresAt) {
+  return expiryLabel(expiresAt).replace(/^，/, '');
+}
+
+function readWorkbuddySlots(p) {
+  const dir = WORKBUDDY_SLOT_DIRS[p.id];
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => /\.json$/i.test(f)).sort();
+  } catch {}
+  return files
+    .map((f) => {
+      const file = path.join(dir, f);
+      const data = readJsonFile(file);
+      if (!data) return null;
+      const account = data.account || {};
+      return {
+        key: f.replace(/\.json$/i, ''),
+        name: accountName(account),
+        uid: account.uid || null,
+        file,
+        expiresAt: data.auth && data.auth.expiresAt,
+      };
+    })
+    .filter(Boolean);
+}
+
+function workbuddyAccounts(p) {
+  const live = readJsonFile(WORKBUDDY_LIVE_FILES[p.id]);
+  const liveUid = live && live.account && live.account.uid;
+  const rows = readWorkbuddySlots(p).map((s) => ({
+    key: s.key,
+    name: s.name,
+    uid: s.uid,
+    enabled: true,
+    active: !!(liveUid && s.uid && String(liveUid) === String(s.uid)),
+    detail: [`uid ${shortUid(s.uid)}`, accessNote(s.expiresAt)].filter(Boolean).join(' · '),
+    expiresAt: s.expiresAt,
+    _file: s.file,
+  }));
+  // 生效文件里是一个没有 slot 的账号（例如手工换过凭证）：照样列出来，
+  // 否则会显示「没有可用账号」而其实正在登录。
+  if (liveUid && !rows.some((a) => a.active)) {
+    rows.unshift({
+      key: '(live)',
+      name: accountName(live.account || {}),
+      uid: liveUid,
+      enabled: true,
+      active: true,
+      detail: `uid ${shortUid(liveUid)} · 生效中，未入账号池`,
+      expiresAt: live && live.auth && live.auth.expiresAt,
+      _file: null,
+    });
+  }
+  return rows;
+}
+
+function codeartsAccounts() {
+  const data = readJsonFile(CODEARTS_DATA_FILE);
+  const accounts = (data && Array.isArray(data.accounts) && data.accounts) || [];
+  const rows = accounts.map((a) => ({
+    key: a.id,
+    name: a.name || a.id,
+    uid: a.id,
+    enabled: a.enabled !== false,
+    active: false,
+    status: a.status || null,
+    failures: Number(a.failures) || 0,
+    lastErr: a.last_err || null,
+    expiresAt: a.session && a.session.expires_at,
+    detail: [
+      a.enabled === false ? '已停用' : '',
+      a.status && a.status !== 'ok' ? `状态 ${a.status}` : '',
+      Number(a.failures) > 0 ? `失败 ${a.failures}` : '',
+      a.last_used ? `最近 ${localDay(a.last_used)}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  }));
+  const enabled = rows.filter((a) => a.enabled);
+  if (enabled.length === 1) enabled[0].active = true;
+  return rows;
+}
+
+function traeAccounts() {
+  let files = [];
+  try {
+    files = fs.readdirSync(TRAE_AUTHS_DIR).filter((f) => /^trae-.*\.json$/i.test(f)).sort();
+  } catch {}
+  const state = readJsonFile(TRAE_STATE_FILE) || {};
+  const byUid = state.accounts || {};
+  const rows = files
+    .map((f) => {
+      const data = readJsonFile(path.join(TRAE_AUTHS_DIR, f));
+      if (!data) return null;
+      const account = data.account || {};
+      const uid = String(account.uid || f.replace(/^trae-|\.json$/gi, ''));
+      const st = byUid[uid] || {};
+      const cooling = st.until && Date.parse(st.until) > Date.now();
+      return {
+        key: uid,
+        name: accountName(account),
+        uid,
+        enabled: st.disabled !== true,
+        active: false,
+        credits: st.credits == null ? null : Number(st.credits),
+        cooling: !!cooling,
+        reason: st.reason || null,
+        expiresAt: data.auth && data.auth.expiresAt,
+        file: path.join(TRAE_AUTHS_DIR, f),
+        detail: [
+          st.credits != null ? `${st.credits} 积分` : '',
+          st.disabled === true ? '已停用' : '',
+          cooling ? `冷却中（${st.reason || '错误过多'}）` : '',
+          accessNote(data.auth && data.auth.expiresAt),
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      };
+    })
+    .filter(Boolean);
+  const enabled = rows.filter((a) => a.enabled);
+  if (enabled.length === 1) enabled[0].active = true;
+  return rows;
+}
+
+function qoderAccounts(p) {
+  const entry = (readJsonFile(PI_AUTH_FILE) || {})[p.ocProvider];
+  if (!entry || !entry.access) return [];
+  return [
+    {
+      key: p.ocProvider,
+      name: entry.name || entry.email || shortUser(entry.userID),
+      uid: entry.userID || null,
+      enabled: true,
+      active: true,
+      expiresAt: entry.expires,
+      detail: [entry.email || '', expiryLabel(entry.expires).replace(/^，/, '')].filter(Boolean).join(' · '),
+    },
+  ];
+}
+
+/**
+ * ZCode 的账号池：zcode-bridge 的 data/accounts.json。
+ * 每条是 `zcode-bridge login`（OAuth 设备码）拿到的一份套餐授权；default 是轮询头。
+ */
+function zcodeStore() {
+  return readJsonFile(ZCODE_ACCOUNTS_FILE) || { version: 1, accounts: [] };
+}
+
+function zcodeAccounts() {
+  const data = zcodeStore();
+  const list = Array.isArray(data.accounts) ? data.accounts : [];
+  const def = data.default;
+  const rows = list.map((a) => ({
+    key: a.id,
+    name: a.label || a.email || a.id,
+    uid: a.userId || a.id,
+    enabled: true,
+    active: a.id === def,
+    expiresAt: a.expiresAt,
+    needsReauth: !!a.needsReauth,
+    hasRefresh: !!a.refreshToken,
+    detail: [
+      a.email || '',
+      a.refreshToken ? '可自动续期' : '无 refresh',
+      expiryLabel(a.expiresAt).replace(/^，/, ''),
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  }));
+  // 没有 default 时，第一条就是实际轮询头
+  if (!rows.some((r) => r.active) && rows.length) rows[0].active = true;
+  // 一个账号都没有时，bridge 会回落到 plan-jwt.json，再回落到 ZCode 桌面端凭据。
+  // 把它也列出来，否则界面显示“没有账号”，实际却在用兜底凭据。
+  if (!rows.length) {
+    const pinned = zcodeSingleToken();
+    if (pinned) {
+      rows.push({
+        key: '(pinned)',
+        name: '固定凭据 plan-jwt.json',
+        uid: null,
+        enabled: true,
+        active: true,
+        detail: '在 integrations/zcode-bridge/plan-jwt.json 里固定，不跟随桌面端换号',
+      });
+    } else if (zcodeDesktopJwt()) {
+      rows.push({
+        key: '(desktop)',
+        name: 'ZCode 桌面端',
+        uid: null,
+        enabled: true,
+        active: true,
+        detail: '从 ~/.zcode 读取，跟随桌面端登录状态',
+      });
+    }
+  }
+  return rows;
+}
+
+/** 单 token 兜底：accounts.json 为空时，bridge 会读 plan-jwt.json。 */
+function zcodeSingleToken() {
+  const f = path.join(ZCODE_DIR, 'plan-jwt.json');
+  if (!fs.existsSync(f)) return null;
+  return readJsonFile(f) || { present: true };
+}
+
+function zcodeAuth() {
+  const rows = zcodeAccounts();
+  const usable = rows.filter((a) => !a.needsReauth && a.key !== '(desktop)' && a.key !== '(pinned)');
+  if (usable.length) {
+    const who = usable.map((a) => a.name).slice(0, 2).join('、');
+    return authResult(true, `已登录（${who}${usable.length > 2 ? ' 等' : ''}）`);
+  }
+  if (zcodeDesktopJwt()) return authResult(true, '已登录（ZCode 桌面端凭据）');
+  if (zcodeSingleToken()) return authResult(true, '已登录（plan-jwt.json）');
+  return authResult(false, '未登录（accounts.json 为空）');
+}
+
+// ---------------------------------------------------------------- Loomy（讯飞）
+//
+// Loomy 桌面端把登录态放在 C:\Users\Public\Loomy\<sha256(用户名) 前 12 位>\userData\
+// auth-session.json，字段是 { session, userid, phone, updatedAt }。它没有多账号池，
+// 也没有可脚本化的登录接口：换号只能在桌面端退出再登录。反代读同一份文件，所以
+// 桌面端登录一次，router / pi / opencode 立刻都能用。
+
+function loomyConfigRoot() {
+  const override = String(process.env.LOOMY_CONFIG_ROOT || '').trim();
+  if (override) return override;
+  if (WIN) {
+    const hash = createHash('sha256').update(os.userInfo().username).digest('hex').slice(0, 12);
+    return path.join('C:', 'Users', 'Public', 'Loomy', hash);
+  }
+  return path.join(HOME, '.config', 'loomy');
+}
+
+function loomyAuthFile() {
+  const explicit = String(process.env.LOOMY_AUTH_FILE || '').trim();
+  if (explicit) return explicit;
+  const root = loomyConfigRoot();
+  for (const file of [
+    path.join(root, 'userData', 'auth-session.json'),
+    path.join(HOME, '.config', 'loomy', 'auth-session.json'),
+  ]) {
+    try {
+      if (fs.statSync(file).isFile()) return file;
+    } catch {}
+  }
+  return path.join(root, 'userData', 'auth-session.json');
+}
+
+function readLoomySession() {
+  const data = readJsonFile(loomyAuthFile());
+  const token = data && String(data.session || '').trim();
+  if (!token) return null;
+  return {
+    token,
+    userid: String(data.userid || '').trim(),
+    phone: String(data.phone || '').trim(),
+    updatedAt: Number(data.updatedAt) || 0,
+  };
+}
+
+function maskPhone(phone) {
+  const s = String(phone || '').trim();
+  if (s.length < 7) return s ? `${s.slice(0, 2)}***` : '';
+  return `${s.slice(0, 3)}****${s.slice(-4)}`;
+}
+
+function loomyAuth() {
+  const session = readLoomySession();
+  if (!session) return authResult(false, '未登录（打开 Loomy 桌面端登录后自动生效）');
+  const who = maskPhone(session.phone) || shortUser(session.userid);
+  // session token 没有到期时间；本地能确认的只有“文件里有非空 token”。
+  // state=valid 让 TUI 显示“正常”，真正的失效会在请求时由上游 401 暴露。
+  return { ok: true, state: 'valid', expiresAt: null, label: `已登录（${who}）` };
+}
+
+function loomyAccounts() {
+  const session = readLoomySession();
+  if (!session) return [];
+  const loggedAt = session.updatedAt
+    ? new Date(session.updatedAt).toLocaleString('zh-CN', { hour12: false })
+    : '';
+  return [
+    {
+      key: session.userid || 'loomy',
+      name: maskPhone(session.phone) || shortUser(session.userid),
+      uid: session.userid || null,
+      enabled: true,
+      active: true,
+      detail: [
+        session.phone ? `手机号 ${maskPhone(session.phone)}` : '',
+        loggedAt ? `登录于 ${loggedAt}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    },
+  ];
+}
+
+// ---------------------------------------------------------------- 百度搭子（DuMate）
+//
+// 桌面端把登录态写在 Electron userData 的 auth.json：
+//   { activeProfileId, accountProfiles: [{ displayName, bceUserId, loginType }] }
+// 只有一份账号；换号只能在桌面端退出后重新登录。main-server 的端口与 in-app key
+// 都在每次启动时变化，反代自己发现，router 只读登录态用于展示。
+
+function dumateAppData() {
+  const explicit = String(process.env.DUMATE_APP_DATA || '').trim();
+  if (explicit) return explicit;
+  const base = process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming');
+  return path.join(base, 'qianfan-desktop-app');
+}
+
+function readDumateProfile() {
+  const data = readJsonFile(path.join(dumateAppData(), 'auth.json'));
+  const profiles = (data && Array.isArray(data.accountProfiles) && data.accountProfiles) || [];
+  if (!profiles.length) return null;
+  const profile =
+    profiles.find((p) => p && p.profileId === data.activeProfileId) || profiles[0] || {};
+  return {
+    name: String(profile.displayName || '').trim(),
+    accountId: String(profile.bceUserId || profile.bceAccountId || '').trim(),
+    loginType: String(profile.loginType || data.activeProviderType || '').trim(),
+    lastLogin: Number(profile.lastSuccessfulLoginAt) || 0,
+  };
+}
+
+function dumateAuth() {
+  const profile = readDumateProfile();
+  if (!profile) return authResult(false, '未登录（打开百度搭子桌面端登录后自动生效）');
+  const who = profile.name || shortUser(profile.accountId);
+  return { ok: true, state: 'valid', expiresAt: null, label: `已登录（${who}）` };
+}
+
+function dumateAccounts() {
+  const profile = readDumateProfile();
+  if (!profile) return [];
+  const loggedAt = profile.lastLogin
+    ? new Date(profile.lastLogin).toLocaleString('zh-CN', { hour12: false })
+    : '';
+  return [
+    {
+      key: profile.accountId || 'dumate',
+      name: profile.name || shortUser(profile.accountId),
+      uid: profile.accountId || null,
+      enabled: true,
+      active: true,
+      detail: [
+        profile.loginType ? `登录方式 ${profile.loginType}` : '',
+        loggedAt ? `登录于 ${loggedAt}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    },
+  ];
+}
+
+function accountsFor(p) {
+  const rows = rawAccountsFor(p);
+  for (const a of rows) a.health = accountHealth(p, a);
+  return rows;
+}
+
+// ---------------------------------------------------------------- 小浣熊（商汤）
+//
+// 桌面端把 IAM access token 明文写在 `~/.office-raccoon/agent/config/auth.json`：
+//   { "access_token": "<JWT>", "office_identity": "personal" }
+// 旧版（OfficeV3）的 agent home 是 `~/.box-agent`，老机器上凭证在那里。
+// 它没有多账号池，也没有可脚本化的登录接口：换号只能在桌面端退出再登录。
+
+function raccoonAuthCandidates() {
+  const explicit = String(process.env.RACCOON_AUTH_FILE || '').trim();
+  if (explicit) return [explicit];
+  return [
+    path.join(HOME, '.office-raccoon', 'agent', 'config', 'auth.json'),
+    path.join(HOME, '.box-agent', 'config', 'auth.json'),
+  ];
+}
+
+function raccoonAuthFile() {
+  for (const file of raccoonAuthCandidates()) {
+    try {
+      if (fs.statSync(file).isFile()) return file;
+    } catch {}
+  }
+  return raccoonAuthCandidates()[0];
+}
+
+/** JWT 的 payload 段；解不开就当没有。只用于显示到期时间，不验签。 */
+function jwtPayload(token) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 3) return null;
+  try {
+    return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function readRaccoonSession() {
+  const data = readJsonFile(raccoonAuthFile());
+  const token = data && String(data.access_token || data.token || data.auth_token || '').trim();
+  if (!token) return null;
+  const payload = jwtPayload(token);
+  return {
+    token,
+    identity: String(data.office_identity || '').trim() || 'personal',
+    orgName: String(data.office_org_name || '').trim(),
+    subject: (payload && payload.sub) || '',
+    expiresAt: payload && Number(payload.exp) ? Number(payload.exp) * 1000 : null,
+    updatedAt: fs.existsSync(raccoonAuthFile()) ? fs.statSync(raccoonAuthFile()).mtimeMs : 0,
+  };
+}
+
+function raccoonIdentityLabel(identity) {
+  const v = String(identity || '').trim();
+  if (!v || v === 'personal') return '个人版';
+  return v;
+}
+
+function raccoonAuth() {
+  const session = readRaccoonSession();
+  if (!session) return authResult(false, '未登录（打开商汤小浣熊桌面端登录后自动生效）');
+  const who = [
+    raccoonIdentityLabel(session.identity),
+    session.orgName ? `组织 ${session.orgName}` : '',
+    shortUser(session.subject),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  // IAM token 只有 30 天，且桌面端会用 refresh 自动续期；到期时间用来提示。
+  return authResult(true, `已登录（${who}）`, session.expiresAt);
+}
+
+function raccoonAccounts() {
+  const session = readRaccoonSession();
+  if (!session) return [];
+  const loggedAt = session.updatedAt
+    ? new Date(session.updatedAt).toLocaleString('zh-CN', { hour12: false })
+    : '';
+  return [
+    {
+      key: session.subject || 'raccoon',
+      name: raccoonIdentityLabel(session.identity),
+      uid: session.subject || null,
+      enabled: true,
+      active: true,
+      expiresAt: session.expiresAt,
+      detail: [
+        session.orgName ? `组织 ${session.orgName}` : '',
+        loggedAt ? `登录于 ${loggedAt}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    },
+  ];
+}
+
+// ---------------------------------------------------------------- 千问办公（QwenWork CN）
+//
+// 与别家最大的不同：**桌面端不把 token 明文落盘**。
+//
+//   auth-v2.dat          宿主登录态，加密绑定本机身份（不解它）
+//   engine-maas-key.dat  MaaS 推理 key，Chromium OSCrypt(`v10`) 加密，
+//                        主密钥在 `Local State` 的 os_crypt.encrypted_key（DPAPI 保护）
+//
+// 所以 router 侧只做「能读到什么就报什么」：
+//   - `.status.json` 是明文，有昵称/套餐/登录状态
+//   - `engine-maas-key.dat` 存在且够新 → 视为已登录（真正的可用性由反代探活确认）
+// 不尝试解密 auth-v2.dat，也不替用户伪造设备身份。
+
+function qwenworkDataDir() {
+  const explicit = String(process.env.QWENWORK_DATA_DIR || '').trim();
+  if (explicit) return explicit;
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming'), 'QwenWorkCN');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(HOME, 'Library', 'Application Support', 'QwenWorkCN');
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'QwenWorkCN');
+}
+
+function qwenworkAgentHome() {
+  const explicit = String(process.env.QWENWORK_HOME || '').trim();
+  if (explicit) return explicit;
+  return path.join(HOME, '.qwenworkcn');
+}
+
+function qwenworkStatus() {
+  return readJsonFile(path.join(qwenworkAgentHome(), '.status.json'));
+}
+
+function qwenworkKeyFile() {
+  return path.join(qwenworkAgentHome(), 'engine-maas-key.dat');
+}
+
+/** 用 DPAPI 解 OSCrypt 主密钥，再解 engine-maas-key.dat。失败返回 null（只用于判断登录态）。 */
+function qwenworkCredential() {
+  // 代理签发的缓存。Linux/macOS 走 `auth-v2.dat` → `/api/desktop-sessions`，
+  // Windows 也会把桌面端写出的 key 归一化到这里，所以先看它。
+  try {
+    const cache = qwenworkCredentials.readCachedKey();
+    if (cache) {
+      const now = Date.now();
+      return {
+        sessionId: cache.sessionId,
+        accessKey: cache.accessKey,
+        expiresAtMs: cache.expiresAtMs,
+        ttlMs: cache.ttlMs,
+        baseUrl: cache.baseUrl,
+        source: cache.source,
+        count: 1,
+        alive: !cache.expiresAtMs || cache.expiresAtMs > now ? 1 : 0,
+      };
+    }
+  } catch {}
+
+  // 还没签发 key，但桌面端已登录：先按登录态显示，反代启动后会签。
+  try {
+    const auth = qwenworkCredentials.readHostAuth();
+    if (!auth.error) {
+      return {
+        sessionId: '',
+        expiresAtMs: auth.expiresAtMs,
+        ttlMs: 0,
+        baseUrl: '',
+        source: auth.source,
+        pending: true,
+        count: 0,
+        alive: 0,
+      };
+    }
+  } catch {}
+
+  if (process.platform !== 'win32') return null;
+
+  // Windows 旧路径：engine-maas-key.dat（桌面端自己签的短 key）
+  const file = qwenworkKeyFile();
+  let buf;
+  try {
+    buf = fs.readFileSync(file);
+  } catch {
+    return null;
+  }
+  const state = readJsonFile(path.join(qwenworkDataDir(), 'Local State'));
+  const b64 = state && state.os_crypt && state.os_crypt.encrypted_key;
+  if (typeof b64 !== 'string' || !b64) return null;
+  let blob = Buffer.from(b64, 'base64');
+  if (blob.subarray(0, 5).toString('latin1') === 'DPAPI') blob = blob.subarray(5);
+  const script = [
+    'Add-Type -AssemblyName System.Security',
+    `$b=[Convert]::FromBase64String('${blob.toString('base64')}')`,
+    '$p=[System.Security.Cryptography.ProtectedData]::Unprotect($b,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)',
+    '[Convert]::ToBase64String($p)',
+  ].join('; ');
+  const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8',
+    timeout: 15000,
+    windowsHide: true,
+  });
+  if (r.status !== 0) return null;
+  const key = Buffer.from(String(r.stdout || '').trim(), 'base64');
+  if (key.length !== 32) return null;
+  if (buf.subarray(0, 3).toString('latin1') !== 'v10') return null;
+  try {
+    const d = createDecipheriv('aes-256-gcm', key, buf.subarray(3, 15));
+    d.setAuthTag(buf.subarray(buf.length - 16));
+    const text = Buffer.concat([d.update(buf.subarray(15, buf.length - 16)), d.final()]).toString('utf8');
+    const doc = JSON.parse(text);
+    const creds = doc && doc.credentials && typeof doc.credentials === 'object' ? doc.credentials : {};
+    const now = Date.now();
+    const rows = Object.entries(creds).map(([id, c]) => ({
+      sessionId: id,
+      expiresAtMs: Number(c && c.expiresAtMs) || 0,
+      ttlMs: Number(c && c.ttlMs) || 0,
+      baseUrl: c && typeof c.baseUrl === 'string' ? c.baseUrl : '',
+    }));
+    const alive = rows.filter((c) => !c.expiresAtMs || c.expiresAtMs > now);
+    const pick = (alive.length ? alive : rows).sort((a, b) => (b.expiresAtMs || 0) - (a.expiresAtMs || 0))[0];
+    return pick ? { ...pick, count: rows.length, alive: alive.length } : null;
+  } catch {
+    return null;
+  }
+}
+
+function qwenworkAuth() {
+  const status = qwenworkStatus();
+  const cred = qwenworkCredential();
+  const who = [status && status.name, status && status.plan].filter(Boolean).join(' · ');
+
+  if (cred && cred.pending) {
+    return {
+      ok: true,
+      state: 'unknown',
+      expiresAt: cred.expiresAtMs || null,
+      label: `已登录（${who || '千问办公'}，推理凭据由反代自动签发${expiryLabel(cred.expiresAtMs)}）`,
+    };
+  }
+  if (cred) {
+    return authResult(true, `已登录（${who || '千问办公'}${expiryLabel(cred.expiresAtMs)}）`, cred.expiresAtMs);
+  }
+  if (status && status.logged_in === true) {
+    // 桌面端说登录了，但取不到 key：多半是桌面端还没发过请求（key 未签发）
+    return {
+      ok: true,
+      state: 'unknown',
+      expiresAt: null,
+      label: `已登录（${who || '千问办公'}，推理凭据由反代启动后自动签发）`,
+    };
+  }
+  return authResult(false, '未登录（打开千问办公桌面端登录后自动生效）');
+}
+
+function qwenworkAccounts() {
+  const status = qwenworkStatus();
+  const cred = qwenworkCredential();
+  if (!status && !cred) return [];
+  const loggedAt = status && status.snapshot_at
+    ? new Date(status.snapshot_at).toLocaleString('zh-CN', { hour12: false })
+    : '';
+  return [
+    {
+      key: (status && (status.username || status.email)) || 'qwenwork',
+      name: (status && (status.name || status.username)) || '千问办公',
+      uid: (status && status.email) || null,
+      enabled: true,
+      active: true,
+      expiresAt: cred ? cred.expiresAtMs : null,
+      detail: [
+        status && status.plan ? `套餐 ${status.plan}` : '',
+        cred
+          ? cred.pending
+            ? '宿主登录态有效，推理凭据由反代自动签发'
+            : `推理凭据 ${cred.alive}/${cred.count} 条有效`
+          : '尚未签发推理凭据',
+        loggedAt ? `登录于 ${loggedAt}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    },
+  ];
+}
+
+function rawAccountsFor(p) {
+  if (p.kind === 'workbuddy') return workbuddyAccounts(p);
+  if (p.kind === 'codearts') return codeartsAccounts();
+  if (p.kind === 'trae') return traeAccounts();
+  if (p.kind === 'qoder') return qoderAccounts(p);
+  if (p.kind === 'zcode') return zcodeAccounts();
+  if (p.kind === 'loomy') return loomyAccounts();
+  if (p.kind === 'raccoon') return raccoonAccounts();
+  if (p.kind === 'qwenwork') return qwenworkAccounts();
+  if (p.kind === 'dumate') return dumateAccounts();
+  return [];
+}
+
+/** 对外（含 --json）只暴露这些字段，内部文件路径与 token 不出现。 */
+function publicAccount(a) {
+  return {
+    key: a.key,
+    name: a.name,
+    uid: a.uid,
+    enabled: a.enabled,
+    active: a.active,
+    detail: a.detail,
+    health: a.health,
+  };
+}
+
+/**
+ * 账号健康：只凭本地落盘状态判断，不发请求、不消耗额度。
+ *
+ * 分成四级，宁愿少报也不要误报——误报会让人去重新登录一个其实好好的账号：
+ *   error  上游明确说这份凭据失效（CodeArts status=error / Trae 冷却 / 已过期）
+ *   warn   还能用但值得看一眼（快到期、启用中却积分为 0、连续失败过）
+ *   ok     正常
+ *   unknown 本地没有足够信息（例如 WorkBuddy 只有 access token 到期时间）
+ */
+function accountHealth(p, a) {
+  const notes = [];
+  const level = (l) => ({ level: l, notes });
+
+  if (p.kind === 'qoder') {
+    const days = expiryDays(a.expiresAt);
+    if (days !== null && days < 0) {
+      // PAT 型凭证过期不影响：代理会拿 PAT 重新换 job token（见 P20/P21 相关性说明）
+      notes.push('access token 已过期，PAT 会自动换新');
+      return level('warn');
+    }
+    if (days !== null && days < 3) {
+      notes.push(`凭证剩 ${days} 天`);
+      return level('warn');
+    }
+    return level(days === null ? 'unknown' : 'ok');
+  }
+
+  if (p.kind === 'workbuddy') {
+    const days = expiryDays(a.expiresAt);
+    if (days === null) return level('unknown');
+    if (days < 0) {
+      notes.push('凭证已过期');
+      return level('error');
+    }
+    if (days < 3) {
+      notes.push(`凭证剩 ${days} 天`);
+      return level('warn');
+    }
+    return level('ok');
+  }
+
+  if (p.kind === 'trae') {
+    if (a.cooling) {
+      notes.push(`上游冷却中：${a.reason || '连续失败'}`);
+      return level('error');
+    }
+    if (a.credits !== null && a.credits <= 0) {
+      notes.push('积分为 0，选中会报额度不足');
+      return level(a.enabled ? 'warn' : 'error');
+    }
+    const days = expiryDays(a.expiresAt);
+    if (days !== null && days < 0) {
+      notes.push('access token 已过期');
+      return level('error');
+    }
+    if (days !== null && days < 3) {
+      notes.push(`凭证剩 ${days} 天`);
+      return level('warn');
+    }
+    return level('ok');
+  }
+
+  if (p.kind === 'codearts') {
+    // 网关自己会续期，status 是它最近一次真实调用的结论，比到期时间可信
+    if (a.status && a.status !== 'ok') {
+      notes.push(a.lastErr ? summarizeErr(a.lastErr) : `状态 ${a.status}`);
+      return level('error');
+    }
+    if (a.failures >= 3) {
+      notes.push(`连续失败 ${a.failures} 次`);
+      return level('warn');
+    }
+    const days = expiryDays(a.expiresAt);
+    if (days !== null && days < 0) {
+      notes.push('凭据已过期');
+      return level('error');
+    }
+    if (days !== null && days < 1) {
+      notes.push('凭据即将过期');
+      return level('warn');
+    }
+    return level(a.failures > 0 ? 'warn' : 'ok');
+  }
+
+  if (p.kind === 'zcode') {
+    if (a.needsReauth) {
+      notes.push('需要重新登录授权');
+      return level('error');
+    }
+    const days = expiryDays(a.expiresAt);
+    if (days !== null && days < 0) {
+      // 有 refresh token 就自动续期；没有就只能重登
+      if (a.hasRefresh) {
+        notes.push('JWT 已过期，会用 refresh 自动换新');
+        return level('warn');
+      }
+      notes.push('JWT 已过期且没有 refresh');
+      return level('error');
+    }
+    if (days !== null && days < 3) {
+      notes.push(`JWT 剩 ${days} 天`);
+      return level(a.hasRefresh ? 'ok' : 'warn');
+    }
+    return level(days === null ? 'unknown' : 'ok');
+  }
+
+  if (p.kind === 'loomy') {
+    // session token 没有到期时间；本地只能确认文件里有一份非空 token。
+    if (!readLoomySession()) {
+      notes.push('未登录 Loomy 桌面端');
+      return level('error');
+    }
+    return level('ok');
+  }
+
+  if (p.kind === 'raccoon') {
+    const session = readRaccoonSession();
+    if (!session) {
+      notes.push('未登录小浣熊桌面端');
+      return level('error');
+    }
+    const days = expiryDays(session.expiresAt);
+    if (days === null) return level('unknown');
+    if (days < 0) {
+      notes.push('IAM token 已过期，打开桌面端会自动续期');
+      return level('error');
+    }
+    if (days < 3) {
+      notes.push(`IAM token 剩 ${days} 天`);
+      return level('warn');
+    }
+    return level('ok');
+  }
+
+  if (p.kind === 'dumate') {
+    // 登录态在桌面端 userData 里；main-server 是否在跑由端口探活单独判断。
+    if (!a || !a.uid) {
+      notes.push('未登录百度搭子桌面端');
+      return level('error');
+    }
+    return level('ok');
+  }
+
+  if (p.kind === 'qwenwork') {
+    const cred = qwenworkCredential();
+    if (!cred) {
+      const status = qwenworkStatus();
+      notes.push(
+        status && status.logged_in === true
+          ? '桌面端已登录，但还没签发推理凭据（去桌面端发一句）'
+          : '未登录千问办公桌面端',
+      );
+      return level(status && status.logged_in === true ? 'warn' : 'error');
+    }
+    const days = expiryDays(cred.expiresAtMs);
+    if (days === null) return level('unknown');
+    // 同为毫秒判断：剩余不足一天的 ceil 是 0，不能拿它区分「已过期」。
+    if (cred.expiresAtMs && cred.expiresAtMs <= Date.now()) {
+      notes.push('推理凭据已过期（exchange 需要有效凭据，无法自续）');
+      return level('error');
+    }
+    if (days < 1) {
+      notes.push('推理凭据即将到期（反代会自动续期）');
+      return level('warn');
+    }
+    return level('ok');
+  }
+
+  return level('unknown');
+}
+
+/** 上游错误原文很长，取头一句够定位就行。 */
+function summarizeErr(text) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  const cut = s.split(/[。；;]/)[0];
+  return (cut || s).slice(0, 50);
+}
+
+function expiryDays(expires) {
+  const ms = normalizeExpiryMs(expires);
+  if (ms === null) return null;
+  return Math.ceil((ms - Date.now()) / 86400000);
+}
+
+/** 需要人工处理的账号：按「先修哪个」排序，error 在前。 */
+function accountIssues(p, accounts) {
+  return accounts
+    .filter((a) => a.health && (a.health.level === 'error' || a.health.level === 'warn'))
+    .sort((x, y) => (x.health.level === 'error' ? -1 : 1) - (y.health.level === 'error' ? -1 : 1));
+}
+
+/** 一行可直接复制的修复命令；不同供应商的修法不一样。 */
+function accountFixHint(p, a) {
+  if (p.kind === 'qoder') return `node router.mjs login ${p.id} --force`;
+  if (p.kind === 'workbuddy') return `node router.mjs login ${p.id} --force`;
+  if (p.kind === 'trae') {
+    if (a.cooling) return `等冷却结束，或 node router.mjs account ${p.id} ${a.key}`;
+    return `node router.mjs account add ${p.id}`;
+  }
+  if (p.kind === 'codearts') return `node router.mjs login ${p.id} --force`;
+  if (p.kind === 'zcode') return `node router.mjs login ${p.id}`;
+  if (p.kind === 'loomy') return `打开 Loomy 桌面端登录；或 node router.mjs login ${p.id}`;
+  if (p.kind === 'raccoon') return `打开商汤小浣熊桌面端登录；或 node router.mjs login ${p.id}`;
+  if (p.kind === 'qwenwork') return `打开千问办公桌面端登录并随便发一句（签发推理凭据）；或 node router.mjs login ${p.id}`;
+  if (p.kind === 'dumate') return `打开百度搭子桌面端登录；或 node router.mjs login ${p.id}`;
+  return `node router.mjs login ${p.id}`;
+}
+
+function healthMark(health) {
+  if (!health) return ' ';
+  if (health.level === 'error') return C.bad;
+  if (health.level === 'warn') return C.warn;
+  if (health.level === 'unknown') return `${C.dim}?${C.reset}`;
+  return ' ';
+}
+
+function printAccounts(p, accounts) {
+  const single = ['qoder', 'loomy', 'raccoon', 'qwenwork', 'dumate'].includes(p.kind);
+  say(
+    `${C.bold}${p.title}${C.reset}  ${dim(`:${p.port} · ${accounts.length} 个账号${single ? '（单账号）' : ''}`)}`,
+  );
+  if (!accounts.length) {
+    warn('没有可用账号');
+    say(dim(`  登录：node router.mjs login ${p.id}`));
+    return;
+  }
+  for (const [i, a] of accounts.entries()) {
+    const mark = a.active
+      ? '\x1b[1;32m*\x1b[0m'
+      : a.enabled && (p.kind === 'codearts' || p.kind === 'trae')
+        ? '\x1b[1;33m+\x1b[0m'
+        : a.enabled
+          ? ' '
+          : `${C.dim}-${C.reset}`;
+    const hp = healthMark(a.health);
+    say(
+      `  ${padEnd(mark, 2)} ${padEnd(hp, 2)} ${padEnd(String(i + 1), 3)} ${padEnd(a.key, 18)} ${padEnd(a.name, 20)} ${dim(a.detail || '')}`.trimEnd(),
+    );
+  }
+  const issues = accountIssues(p, accounts);
+  if (issues.length) {
+    say('');
+    for (const a of issues) {
+      const label = a.health.level === 'error' ? `${C.bad} 需要重新登录` : `${C.warn} 注意`;
+      say(`  ${label}  ${a.name}（${a.key}）：${a.health.notes.join('；')}`);
+      say(`       ${dim(accountFixHint(p, a))}`);
+    }
+  }
+  if (single) {
+    say(dim(`  单账号，换号请重新登录：node router.mjs login ${p.id}`));
+  } else {
+    say(dim(`  切换：node router.mjs account ${p.id} <编号 | key>`));
+    if (p.kind === 'codearts' || p.kind === 'trae') {
+      say(dim(`  恢复全部启用：node router.mjs account ${p.id} --all`));
+    }
+  }
+}
+
+function accountJson(p, accounts) {
+  return {
+    id: p.id,
+    title: p.title,
+    kind: p.kind,
+    switchable: ['workbuddy', 'codearts', 'trae', 'zcode'].includes(p.kind),
+    accounts: accounts.map(publicAccount),
+  };
+}
+
+function listAllAccounts({ json = false } = {}) {
+  const groups = PROVIDERS.map((p) => ({ p, accounts: accountsFor(p) }));
+  if (json) {
+    console.log(
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          generatedAt: new Date().toISOString(),
+          providers: groups.map((g) => accountJson(g.p, g.accounts)),
+        },
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
+  say(`${C.bold}账号${C.reset}  ${dim('* 当前生效　+ 参与轮询　- 已停用　空=可切换　✗需重登　!注意')}`);
+  say('─'.repeat(92));
+  for (const [i, g] of groups.entries()) {
+    if (i > 0) say('');
+    printAccounts(g.p, g.accounts);
+  }
+  say('─'.repeat(92));
+  const totalIssues = groups.reduce((n, g) => n + accountIssues(g.p, g.accounts).length, 0);
+  if (totalIssues) {
+    warn(`${totalIssues} 个账号需要处理`);
+    say(dim('  只看问题：node router.mjs account check'));
+  } else {
+    ok('所有账号正常');
+  }
+  say(
+    dim(
+      '  只看一家：node router.mjs account <id>　切换：account <id> <编号|key>　加：account add <id>　删：account remove <id> <编号|key>',
+    ),
+  );
+  return 0;
+}
+
+/** 编号 / slot key / uid / 名称精确匹配；其次唯一前缀；名称重复时要求用 id。 */
+function matchAccount(accounts, arg) {
+  const s = String(arg || '').trim();
+  if (!s) return { error: '缺少账号（可以用编号、key 或名称）' };
+  const low = s.toLowerCase();
+  const eq = (v) => v != null && String(v).toLowerCase() === low;
+  let hits = accounts.filter((a) => eq(a.key) || eq(a.uid));
+  if (!hits.length) hits = accounts.filter((a) => eq(a.name));
+  if (!hits.length && /^\d+$/.test(s)) {
+    const n = Number(s);
+    if (n >= 1 && n <= accounts.length) hits = [accounts[n - 1]];
+  }
+  if (!hits.length) {
+    const pref = accounts.filter((a) =>
+      [a.key, a.uid, a.name].some((v) => v != null && String(v).toLowerCase().startsWith(low)),
+    );
+    if (pref.length === 1) hits = pref;
+  }
+  if (!hits.length) {
+    return { error: `找不到账号：${s}（可用：${accounts.map((a) => a.key).join('、') || '无'}）` };
+  }
+  if (hits.length > 1) {
+    return {
+      error: `${s} 匹配到多个账号，请用编号或完整 key：${hits.map((a) => a.key).join('、')}`,
+    };
+  }
+  return { account: hits[0] };
+}
+
+/** 运行中的反代才需要重启；没运行就等下次 up 时自然加载。 */
+async function restartAfterAccountChange(p) {
+  if (!(await probePort(p.port, 1200)).up) {
+    say(dim('  反代未运行，下次启动时生效'));
+    return true;
+  }
+  const failed = await doRestart([p], { quiet: true });
+  if (failed) {
+    bad(`  ${p.title} 重启失败，看日志：node router.mjs logs ${p.id} 80`);
+    return false;
+  }
+  ok(`  ${p.title} 已重启（:${p.port}）`);
+  return true;
+}
+
+async function switchWorkbuddyAccount(p, target, { dryRun = false } = {}) {
+  if (target.active) {
+    ok(`当前已经是账号 ${target.key}（${target.name}）`);
+    return 0;
+  }
+  if (dryRun) {
+    say(`\x1b[1;33m[dry-run]\x1b[0m 将把 ${p.title} 生效凭证切到 ${target.key}（${target.name}）`);
+    return 0;
+  }
+
+  if (!target._file) {
+    bad(`账号 ${target.key} 只有生效文件、没有 slot，无法作为切换目标`);
+    return 1;
+  }
+
+  const liveFile = WORKBUDDY_LIVE_FILES[p.id];
+  const live = readJsonFile(liveFile);
+  // 先把生效文件里可能刚刷新过的 token 存回它自己的 slot，再覆盖，
+  // 否则切换会丢掉当前账号这次运行期间续出来的新凭证。
+  if (live && live.account && live.account.uid) {
+    const owner = readWorkbuddySlots(p).find((s) => String(s.uid) === String(live.account.uid));
+    if (owner) {
+      writeJsonAtomic(owner.file, live, { mode: 0o600 });
+      say(dim(`  已把当前账号 ${owner.key} 的最新凭证存回 slot`));
+    } else {
+      warn(`当前生效账号没有对应 slot（uid ${shortUid(live.account.uid)}），切换后不会留在账号池`);
+    }
+  }
+
+  const slot = readJsonFile(target._file);
+  if (!slot) {
+    bad(`读取 slot 失败：${target._file}`);
+    return 1;
+  }
+  writeJsonAtomic(liveFile, slot, { mode: 0o600 });
+  // 告诉共享库这是用户主动切号，避免紧接着的自动同步按 mtime 把它当成旧状态。
+  await markActiveWorkbuddy(p.id, target.uid);
+  ok(`已切换 ${p.title} 到账号 ${target.key}（${target.name}）`);
+  const restarted = await restartAfterAccountChange(p);
+  if (!restarted) return 1;
+  say('');
+  printAccounts(p, accountsFor(p));
+  return 0;
+}
+
+function codeartsAdminHeaders() {
+  const data = readJsonFile(CODEARTS_DATA_FILE) || {};
+  const password = (data.settings && data.settings.admin_password) || '';
+  const headers = { 'Content-Type': 'application/json' };
+  if (password) headers['X-Admin-Password'] = password;
+  return headers;
+}
+
+async function switchCodeartsPool(p, target, { dryRun = false, all = false } = {}) {
+  const up = (await probePort(p.port, 1200)).up;
+  const headers = codeartsAdminHeaders();
+  let rows;
+  if (up) {
+    try {
+      const state = await fetchJson(`http://127.0.0.1:${p.port}/admin/api/state`, { headers, timeout: 8000 });
+      rows = (state && Array.isArray(state.accounts) && state.accounts) || null;
+    } catch (e) {
+      // 网关在跑时直接改文件会被它的持久化覆盖，所以宁可报错也不猜
+      bad(`读取 CodeArts 账号池失败：${e.message}`);
+      return 1;
+    }
+    if (!rows) {
+      bad('CodeArts /admin/api/state 没有返回 accounts');
+      return 1;
+    }
+  } else {
+    rows = accountsFor(p).map((a) => ({ id: a.key, name: a.name, enabled: a.enabled }));
+  }
+
+  if (!all && !rows.some((a) => a.id === target.key)) {
+    bad(`账号 ${target.key} 不在 CodeArts 当前调度池里`);
+    return 1;
+  }
+  const desired = all ? rows.map((a) => a.id) : [target.key];
+  const changes = rows.filter((a) => (a.enabled !== false) !== desired.includes(a.id));
+  if (!changes.length) {
+    ok(`CodeArts 账号池已经是目标状态${all ? '（全部启用）' : `（只启用 ${target.name}）`}`);
+    return 0;
+  }
+
+  if (dryRun) {
+    say(
+      `\x1b[1;33m[dry-run]\x1b[0m CodeArts 账号池将变为${all ? '全部启用' : `只启用 ${target.name}（${target.key}）`}：`,
+    );
+    for (const a of changes) {
+      say(
+        `  ${a.enabled !== false ? '停用' : '启用'}  ${a.name || a.id}  ${dim(a.id)}`,
+      );
+    }
+    return 0;
+  }
+
+  if (up) {
+    for (const a of changes) {
+      await fetchJson(`http://127.0.0.1:${p.port}/admin/api/accounts`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action: 'toggle', id: a.id }),
+        timeout: 8000,
+      });
+    }
+  } else {
+    const data = readJsonFile(CODEARTS_DATA_FILE);
+    if (!data || !Array.isArray(data.accounts)) {
+      bad(`读取账号池失败：${CODEARTS_DATA_FILE}`);
+      return 1;
+    }
+    for (const a of data.accounts) a.enabled = desired.includes(a.id);
+    writeJsonAtomic(CODEARTS_DATA_FILE, data);
+  }
+
+  ok(`CodeArts 账号池已更新${all ? '（全部启用）' : `（只启用 ${target.name}）`}`);
+  await sleep(150);
+  say('');
+  printAccounts(p, accountsFor(p));
+  return 0;
+}
+
+async function switchTraeAccount(p, target, { dryRun = false, all = false } = {}) {
+  const accounts = accountsFor(p);
+  const desired = all ? accounts.map((a) => a.uid) : [target.uid];
+  const changes = accounts.filter((a) => a.enabled !== desired.includes(a.uid));
+  if (!changes.length) {
+    ok(`Trae 账号池已经是目标状态${all ? '（全部启用）' : `（只启用 ${target.name}）`}`);
+    return 0;
+  }
+
+  if (dryRun) {
+    say(
+      `\x1b[1;33m[dry-run]\x1b[0m Trae 账号池将变为${all ? '全部启用' : `只启用 ${target.name}（${target.uid}）`}：`,
+    );
+    for (const a of changes) say(`  ${a.enabled ? '停用' : '启用'}  ${a.name}  ${dim(a.uid)}`);
+    return 0;
+  }
+
+  const state = readJsonFile(TRAE_STATE_FILE) || {};
+  const byUid = state.accounts && typeof state.accounts === 'object' ? state.accounts : {};
+  for (const a of accounts) {
+    if (!byUid[a.uid]) byUid[a.uid] = { credits: 0, disabled: false, until: '0001-01-01T00:00:00Z' };
+    byUid[a.uid].disabled = !desired.includes(a.uid);
+  }
+  state.accounts = byUid;
+  writeJsonAtomic(TRAE_STATE_FILE, state);
+
+  ok(`Trae 账号池已更新${all ? '（全部启用）' : `（只启用 ${target.name}）`}`);
+  const restarted = await restartAfterAccountChange(p);
+  if (!restarted) return 1;
+  say('');
+  printAccounts(p, accountsFor(p));
+  return 0;
+}
+
+async function switchAccount(p, accounts, arg, { dryRun = false } = {}) {
+  const matched = matchAccount(accounts, arg);
+  if (matched.error) {
+    bad(matched.error);
+    return 1;
+  }
+  const target = matched.account;
+
+  if (p.kind === 'qoder') {
+    warn(`${p.title} 每个区域只有一条凭证，没有多账号可切换`);
+    say(dim(`  换号：node router.mjs login ${p.id} [--force]`));
+    return 1;
+  }
+  if (p.kind === 'loomy') {
+    warn(`${p.title} 只有一个登录态，没有多账号可切换`);
+    say(dim('  换号：在 Loomy 桌面端退出后重新登录，反代会自动读到新 session'));
+    return 1;
+  }
+  if (p.kind === 'raccoon') {
+    warn(`${p.title} 只有一个登录态，没有多账号可切换`);
+    say(dim('  换号：在商汤小浣熊桌面端退出后重新登录，反代会自动读到新 token'));
+    return 1;
+  }
+  if (p.kind === 'qwenwork') {
+    warn(`${p.title} 只有一个登录态，没有多账号可切换`);
+    say(dim('  换号：在千问办公桌面端退出后重新登录，反代会自动读到新凭据'));
+    return 1;
+  }
+  if (p.kind === 'dumate') {
+    warn(`${p.title} 只有一个登录态，没有多账号可切换`);
+    say(dim('  换号：在百度搭子桌面端退出后重新登录，反代会自动读到新登录态'));
+    return 1;
+  }
+
+  if (p.kind === 'workbuddy') return switchWorkbuddyAccount(p, target, { dryRun });
+  if (p.kind === 'codearts') return switchCodeartsPool(p, target, { dryRun });
+  if (p.kind === 'trae') return switchTraeAccount(p, target, { dryRun });
+  if (p.kind === 'zcode') return switchZcodeAccount(p, target, { dryRun });
+  return 1;
+}
+
+async function switchAllAccounts(p, { dryRun = false } = {}) {
+  if (p.kind === 'workbuddy') {
+    warn('WorkBuddy 的生效文件同一时刻只能指向一个 slot，--all 不适用');
+    say(dim(`  选择账号：node router.mjs account ${p.id} <编号 | key>`));
+    return 1;
+  }
+  if (p.kind === 'zcode') {
+    ok('ZCode 的账号池本来就全部参与轮询，无需恢复');
+    say(dim(`  想调整轮询头：node router.mjs account ${p.id} <编号 | key>`));
+    return 0;
+  }
+  if (['qoder', 'loomy', 'raccoon', 'qwenwork', 'dumate'].includes(p.kind)) {
+    warn(`${p.title} 没有多账号池，--all 不适用`);
+    return 1;
+  }
+  const accounts = accountsFor(p);
+  if (!accounts.length) {
+    warn(`${p.title} 没有可用账号`);
+    return 1;
+  }
+  if (p.kind === 'codearts') return switchCodeartsPool(p, null, { dryRun, all: true });
+  if (p.kind === 'trae') return switchTraeAccount(p, null, { dryRun, all: true });
+  return 1;
+}
+
+// ---------------------------------------------------------------- 账号删除
+//
+// 四家的「删除」原语完全不同，而且都不可逆，所以统一成两步：
+//   1. 先归档（WorkBuddy 复制文件到 retired-<时间>/，Trae 先取出再交给上游删）
+//   2. 再从调度池移除
+// 归档目录里留一份原始凭证，账号现在还在的话，`account restore` 能捡回来。
+
+function retiredDir(p) {
+  return path.join(p.kind === 'workbuddy' ? WORKBUDDY_SLOT_DIRS[p.id] : path.dirname(CODEARTS_DATA_FILE), `retired-${stampNow()}`);
+}
+
+function stampNow() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+/** 把要删的东西挪进归档目录，返回归档路径；失败返回 null。 */
+function archiveFile(file, dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, path.basename(file));
+    fs.copyFileSync(file, dest);
+    return dest;
+  } catch {
+    return null;
+  }
+}
+
+async function removeWorkbuddyAccount(p, target, { dryRun = false } = {}) {
+  if (target.active) {
+    return { error: `不能删除当前生效的账号（${target.name}），先切到别的账号再删` };
+  }
+  if (!target._file) {
+    return { error: '这个账号没有对应的 slot 文件，无法删除（它只是生效文件里的残留）' };
+  }
+  if (dryRun) {
+    say(`\x1b[1;33m[dry-run]\x1b[0m 将删除 ${p.title} 的账号 ${target.key}（${target.name}），凭证归档到 retired-*`);
+    return { ok: true };
+  }
+  const dir = retiredDir(p);
+  const archived = archiveFile(target._file, dir);
+  if (!archived) return { error: `归档失败，未删除：${target._file}` };
+  try {
+    fs.unlinkSync(target._file);
+  } catch (e) {
+    return { error: `删除 slot 失败：${e.message}` };
+  }
+  // 注销墓碑：sync-homes 是按 uid 求并集的，不登记的话下一轮同步会把账号捞回来
+  await markWorkbuddyDeleted(p.id, target.uid);
+  return { ok: true, archived };
+}
+
+/** 把「用户主动删了这个账号」写进共享库墓碑，避免双系统同步把它复活。 */
+async function markWorkbuddyDeleted(region, uid) {
+  try {
+    const { markAccountDeleted } = await import(new URL('./scripts/sync-homes.mjs', import.meta.url).href);
+    markAccountDeleted(region, uid);
+  } catch {}
+}
+
+async function removeTraeAccount(p, target, { dryRun = false } = {}) {
+  const up = (await probePort(p.port, 1200)).up;
+  if (dryRun) {
+    say(`\x1b[1;33m[dry-run]\x1b[0m 将删除 Trae 的账号 ${target.key}（${target.name}）`,);
+    return { ok: true };
+  }
+
+  // 先归档：trae 的凭证就在 auths/trae-<uid>.json
+  const dir = path.join(TRAE_DIR, 'auths', `retired-${stampNow()}`);
+  const archived = target.file ? archiveFile(target.file, dir) : null;
+
+  if (up) {
+    // 网关在跑时走它的管理接口，否则 state.json 会被它自己覆盖回去
+    const key = keyFor('trae-local');
+    const res = await fetchJson(`http://127.0.0.1:${p.port}/admin/api/accounts/${encodeURIComponent(target.uid)}`, {
+      method: 'DELETE',
+      headers: key ? { Authorization: `Bearer ${key}` } : {},
+      timeout: 8000,
+    }).catch((e) => ({ error: e }));
+    if (res && res.error) return { error: `上游删除失败：${res.error.message}` };
+  } else {
+    const state = readJsonFile(TRAE_STATE_FILE) || {};
+    if (state.accounts && state.accounts[target.uid]) delete state.accounts[target.uid];
+    writeJsonAtomic(TRAE_STATE_FILE, state);
+    if (target.file) {
+      try {
+        fs.unlinkSync(target.file);
+      } catch {}
+    }
+  }
+  return { ok: true, archived };
+}
+
+async function removeCodeartsAccount(p, target, { dryRun = false } = {}) {
+  const up = (await probePort(p.port, 1200)).up;
+  if (dryRun) {
+    say(`\x1b[1;33m[dry-run]\x1b[0m 将删除 CodeArts 的账号 ${target.key}（${target.name}）`);
+    return { ok: true };
+  }
+  const headers = codeartsAdminHeaders();
+  if (up) {
+    const res = await fetchJson(`http://127.0.0.1:${p.port}/admin/api/accounts`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ action: 'remove', id: target.key }),
+      timeout: 8000,
+    }).catch((e) => ({ error: e }));
+    if (res && res.error) return { error: `删除失败：${res.error.message}` };
+  } else {
+    const data = readJsonFile(CODEARTS_DATA_FILE);
+    if (!data || !Array.isArray(data.accounts)) return { error: `读取账号池失败：${CODEARTS_DATA_FILE}` };
+    const before = data.accounts.length;
+    data.accounts = data.accounts.filter((a) => a.id !== target.key);
+    if (data.accounts.length === before) return { error: `账号 ${target.key} 不在池里` };
+    writeJsonAtomic(CODEARTS_DATA_FILE, data);
+  }
+  return { ok: true };
+}
+
+/** 从账号池里删掉一个账号；Qoder 没有池，只能重新登录换号。 */
+async function removeAccountFromPool(p, accounts, arg, { dryRun = false, force = false } = {}) {
+  if (p.kind === 'qoder') {
+    return {
+      error: `${p.title} 每个区域只有一条凭证，没有账号池可删`,
+      hint: `换号：node router.mjs login ${p.id} --force`,
+    };
+  }
+  if (p.kind === 'loomy') {
+    return {
+      error: `${p.title} 的登录态由 Loomy 桌面端维护，没有可删的账号池`,
+      hint: '换号请在桌面端退出后重新登录',
+    };
+  }
+  if (p.kind === 'raccoon') {
+    return {
+      error: `${p.title} 的登录态由商汤小浣熊桌面端维护，没有可删的账号池`,
+      hint: '换号请在桌面端退出后重新登录',
+    };
+  }
+  if (p.kind === 'qwenwork') {
+    return {
+      error: `${p.title} 的登录态由千问办公桌面端维护，没有可删的账号池`,
+      hint: '换号请在千问办公桌面端退出后重新登录',
+    };
+  }
+  if (p.kind === 'dumate') {
+    return {
+      error: `${p.title} 的登录态由百度搭子桌面端维护，没有可删的账号池`,
+      hint: '换号请在百度搭子桌面端退出后重新登录',
+    };
+  }
+  const matched = matchAccount(accounts, arg);
+  if (matched.error) return { error: matched.error };
+  const target = matched.account;
+
+  const health = target.health || {};
+  if (health.level === 'error' && !force) {
+    // 最常想删的就是这种「坏账号」，但它们往往只是需要重新登录，删掉反而丢凭证
+    return {
+      error: `账号 ${target.key} 有故障，通常重新登录就能修好，不是非删不可`,
+      hint: `重新登录：${accountFixHint(p, target)}    确实要删加 --force`,
+    };
+  }
+
+  say(`${C.bold}删除账号${C.reset} ${p.title} · ${target.name}（${target.key}）`);
+  if (dryRun) say(dim('  --dry-run：只预览，不动文件'));
+
+  let result;
+  if (p.kind === 'workbuddy') result = await removeWorkbuddyAccount(p, target, { dryRun });
+  else if (p.kind === 'trae') result = await removeTraeAccount(p, target, { dryRun });
+  else if (p.kind === 'codearts') result = await removeCodeartsAccount(p, target, { dryRun });
+  else if (p.kind === 'zcode') result = await removeZcodeAccount(p, target, { dryRun });
+  else result = { error: `不知道怎么删除 ${p.title} 的账号` };
+
+  if (result.error) return result;
+  if (dryRun) return { ok: true };
+
+  // WorkBuddy 删 slot 不需要重启（反代只读生效文件）；其余换了调度池要重载
+  if (p.kind === 'trae' || p.kind === 'codearts') {
+    const restarted = await restartAfterAccountChange(p);
+    if (!restarted) return { ok: true, warn: '账号已删除，但反代重启失败' };
+  }
+
+  ok(`已删除账号 ${target.key}（${target.name}）`);
+  if (result.archived) say(dim(`  凭证已归档：${result.archived}`));
+  say('');
+  printAccounts(p, accountsFor(p));
+  return { ok: true };
+}
+
+/** 从归档目录把账号捡回池子（WorkBuddy / Trae 是文件，CodeArts 需要重新登录）。 */
+async function restoreAccounts(p, { dryRun = false, list = false } = {}) {
+  if (p.kind === 'codearts' || p.kind === 'qoder' || p.kind === 'zcode' || p.kind === 'loomy' || p.kind === 'raccoon') {
+    return { error: `${p.title} 的凭证删掉后只能重新登录，无法从归档恢复` };
+  }
+  const dir = p.kind === 'workbuddy' ? WORKBUDDY_SLOT_DIRS[p.id] : path.join(TRAE_DIR, 'auths');
+  let archives = [];
+  try {
+    archives = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && /^retired-/.test(d.name))
+      .map((d) => d.name)
+      .sort()
+      .reverse();
+  } catch {}
+  const files = [];
+  for (const a of archives) {
+    let names = [];
+    try {
+      names = fs.readdirSync(path.join(dir, a)).filter((f) => /\.json$/.test(f));
+    } catch {}
+    for (const f of names) files.push({ archive: a, file: path.join(dir, a, f), name: f });
+  }
+  if (!files.length) return { error: `没有归档可恢复（${dir} 下没有 retired-* 目录）` };
+  if (list) return { ok: true, files };
+  if (dryRun) {
+    for (const f of files) say(`\x1b[1;33m[dry-run]\x1b[0m 将恢复 ${f.name}（来自 ${f.archive}）`);
+    return { ok: true, files };
+  }
+  let restored = 0;
+  for (const f of files) {
+    const dest = path.join(dir, f.name);
+    if (fs.existsSync(dest)) continue; // 池里已有同名，不覆盖
+    try {
+      fs.copyFileSync(f.file, dest);
+      restored += 1;
+      const data = readJsonFile(dest);
+      const uid = data && data.account && data.account.uid;
+      if (uid) await clearDeleted(String(uid));
+    } catch {}
+  }
+  return { ok: true, restored, files };
+}
+
+/** 恢复账号时解除墓碑，否则下一轮同步又会把它删掉。 */
+async function clearDeleted(uid) {
+  try {
+    const { clearAccountDeleted } = await import(new URL('./scripts/sync-homes.mjs', import.meta.url).href);
+    for (const region of ['workbuddy', 'workbuddy-global']) clearAccountDeleted(region, uid);
+  } catch {}
+}
+
+/** 在浏览器里登录一个新账号并写进账号池；已有账号不会被覆盖。 */
+async function addAccountToPool(p, { dryRun = false, label = '' } = {}) {
+  if (p.kind === 'loomy') {
+    warn(`${p.title} 只有一个登录态，请在 Loomy 桌面端退出后登录另一个账号`);
+    say(dim('  反代会直接读到新的 auth-session.json，不需要重新配置 provider'));
+    return 1;
+  }
+  if (p.kind === 'raccoon') {
+    warn(`${p.title} 只有一个登录态，请在商汤小浣熊桌面端退出后登录另一个账号`);
+    say(dim('  反代会直接读到新的 auth.json，不需要重新配置 provider'));
+    return 1;
+  }
+  if (p.kind === 'qwenwork') {
+    warn(`${p.title} 只有一个登录态，请在千问办公桌面端退出后登录另一个账号`);
+    say(dim('  反代会直接读到新的 MaaS 凭据，不需要重新配置 provider'));
+    return 1;
+  }
+  if (p.kind === 'dumate') {
+    warn(`${p.title} 只有一个登录态，请在百度搭子桌面端退出后登录另一个账号`);
+    say(dim('  反代会直接读到新的 auth.json，不需要重新配置 provider'));
+    return 1;
+  }
+  const before = accountsFor(p);
+  if (dryRun) {
+    say(`${C.bold}${p.title}${C.reset} 将通过浏览器登录添加账号`);
+    say(dim('  已有账号不会被覆盖；浏览器里请登录另一个账号'));
+    say(dim(`  当前账号池：${before.map((a) => a.key).join('、') || '空'}`));
+    return 0;
+  }
+
+  const wasUp = (await probePort(p.port, 1000)).up;
+  say(`${C.bold}添加账号${C.reset} ${p.title}`);
+  say(dim('  浏览器打开后请登录另一个账号；同一个账号会更新原 slot，不会重复添加。'));
+
+  let success = false;
+  if (p.kind === 'workbuddy') success = await loginWorkbuddy(p);
+  else if (p.kind === 'codearts') success = await loginCodearts(p);
+  else if (p.kind === 'trae') success = await loginTrae(p);
+  else if (p.kind === 'zcode') success = await loginZcode(p, { label });
+  if (!success) return 1;
+
+  if (p.kind === 'codearts') await sleep(200);
+  const after = accountsFor(p);
+  const added = after.filter((a) => !before.some((b) => b.key === a.key));
+
+  // 登录流程可能为了拿凭证临时拉起网关；恢复到命令执行前的运行状态。
+  if (!wasUp && (await probePort(p.port, 1000)).up) {
+    await doDown([p], { quiet: true });
+    say(dim('  登录前反代未运行，已恢复为停止状态'));
+  }
+
+  if (p.kind === 'trae' && wasUp) {
+    await restartAfterAccountChange(p);
+  } else if (p.kind === 'workbuddy') {
+    // 只有当前生效账号也被登录流程换掉时才需要重启；单纯往池里加 slot 不影响运行中的反代。
+    const beforeActive = (before.find((a) => a.active) || {}).key;
+    const afterActive = (after.find((a) => a.active) || {}).key;
+    if (wasUp && beforeActive !== afterActive) await restartAfterAccountChange(p);
+  }
+
+  if (added.length) {
+    ok(`已添加 ${added.length} 个账号：${added.map((a) => `${a.key}（${a.name}）`).join('、')}`);
+    say(dim(`  切换到新账号：node router.mjs account ${p.id} ${added[0].key}`));
+  } else {
+    warn('登录完成，但账号池里没有新账号（通常说明登录的是已有账号，slot 已被更新）');
+  }
+
+  // CodeArts / Trae 的「池」就是 enabled 集合。原本刻意收敛成单账号时，
+  // 新账号默认会参与轮询；提醒一句，避免用户以为还是原来那个账号在跑。
+  if (
+    (p.kind === 'codearts' || p.kind === 'trae') &&
+    before.filter((a) => a.enabled).length === 1 &&
+    after.filter((a) => a.enabled).length > 1
+  ) {
+    const keep = before.find((a) => a.enabled);
+    warn(`账号池已从单账号恢复为多账号轮询${keep ? `；只想保留 ${keep.name} 请执行 account ${p.id} ${keep.key}` : ''}`);
+  }
+  say('');
+  printAccounts(p, after);
+  return 0;
+}
+
+async function cmdAccount(raw, { json = false } = {}) {
+  const all = raw.includes('--all');
+  const dryRun = raw.includes('--dry-run');
+  const force = raw.includes('--force');
+  // --label <名字>：ZCode 的登录给账号起个别名，避免只认 JWT 里的 id
+  const labelIdx = raw.indexOf('--label');
+  const label = labelIdx >= 0 && labelIdx + 1 < raw.length ? raw[labelIdx + 1] : '';
+  const pos = raw.filter((a, i) => !a.startsWith('--') && !(labelIdx >= 0 && i === labelIdx + 1));
+  // 支持三种写法：account add <id> / account remove <id> [账号] / account <id> --add
+  const sub = pos[0] ? pos[0].toLowerCase() : '';
+  const addCmd = sub === 'add';
+  const removeCmd = sub === 'remove' || sub === 'rm' || sub === 'del';
+  const restoreCmd = sub === 'restore';
+  const checkCmd = sub === 'check' || sub === 'doctor';
+  const mergeCmd = sub === 'merge' || sub === 'dedupe';
+  const wantsAdd = raw.includes('--add') || addCmd;
+  const wantsRemove = raw.includes('--remove') || raw.includes('--rm') || removeCmd;
+  const rest = addCmd || removeCmd || restoreCmd || checkCmd || mergeCmd ? pos.slice(1) : pos;
+
+  const fail = (message, hint) => {
+    if (json) console.log(JSON.stringify({ ok: false, error: message }, null, 2));
+    else {
+      bad(message);
+      if (hint) say(dim(`  ${hint}`));
+    }
+    return 1;
+  };
+
+  if (wantsAdd) {
+    if (all) return fail('--add 不能和 --all 一起使用');
+    if (!rest.length) {
+      return fail(
+        '添加账号需要指定供应商',
+        `用法：node router.mjs account add <id>    例如：node router.mjs account add workbuddy`,
+      );
+    }
+    if (rest.length > 1) return fail(`参数太多：${rest.slice(1).join(' ')}`);
+    if (json) return fail('添加账号是交互式流程，不支持 --json');
+    const resolvedAdd = resolveId(rest[0]);
+    if (resolvedAdd.error) {
+      return fail(resolvedAdd.error, `可选：${PROVIDERS.map((p) => p.id).join('、')}`);
+    }
+    const pAdd = resolvedAdd.p;
+    if (pAdd.kind === 'qoder') {
+      return fail(
+        `${pAdd.title} 每个区域只有一条凭证，没有账号池可添加`,
+        `换号：node router.mjs login ${pAdd.id} --force`,
+      );
+    }
+    return addAccountToPool(pAdd, { dryRun, label });
+  }
+
+  if (wantsRemove) {
+    if (all) return fail('删除账号不能同时用 --all');
+    if (!rest.length) {
+      return fail(
+        '删除账号需要指定供应商和账号',
+        `用法：node router.mjs account remove <id> <编号 | key> [--force] [--dry-run]`,
+      );
+    }
+    const resolvedRm = resolveId(rest[0]);
+    if (resolvedRm.error) return fail(resolvedRm.error, `可选：${PROVIDERS.map((q) => q.id).join('、')}`);
+    const pRm = resolvedRm.p;
+    const pool = accountsFor(pRm);
+    if (!pool.length) return fail(`${pRm.title} 没有可用账号`, `登录：node router.mjs login ${pRm.id}`);
+    if (rest.length < 2) {
+      // 不给账号时列出来，避免误删
+      printAccounts(pRm, pool);
+      return fail('请指定要删除的账号（编号或 key）', `例如：node router.mjs account remove ${pRm.id} 2`);
+    }
+    if (rest.length > 2) return fail(`参数太多：${rest.slice(2).join(' ')}`);
+    const result = await removeAccountFromPool(pRm, pool, rest[1], { dryRun, force });
+    if (result.error) return fail(result.error, result.hint);
+    if (result.warn) warn(result.warn);
+    return 0;
+  }
+
+  if (restoreCmd) {
+    if (!rest.length) {
+      return fail('恢复账号需要指定供应商', `用法：node router.mjs account restore <id> [--dry-run]`);
+    }
+    const resolvedRs = resolveId(rest[0]);
+    if (resolvedRs.error) return fail(resolvedRs.error, `可选：${PROVIDERS.map((q) => q.id).join('、')}`);
+    const pRs = resolvedRs.p;
+    const result = await restoreAccounts(pRs, { dryRun, list: true });
+    if (result.error) return fail(result.error);
+    const dir = pRs.kind === 'workbuddy' ? WORKBUDDY_SLOT_DIRS[pRs.id] : path.join(TRAE_DIR, 'auths');
+    say(`${C.bold}可恢复的归档${C.reset} ${pRs.title}  ${dim(dir)}`);
+    for (const f of result.files) {
+      const exists = fs.existsSync(path.join(dir, f.name));
+      say(`  ${exists ? dim('(池里已有)') : C.ok} ${padEnd(f.archive, 24)} ${f.name}`);
+    }
+    if (dryRun) {
+      const r = await restoreAccounts(pRs, { dryRun: true });
+      return r.error ? fail(r.error) : 0;
+    }
+    const r = await restoreAccounts(pRs);
+    if (r.error) return fail(r.error);
+    ok(`已恢复 ${r.restored} 个账号档案${r.restored ? '（重名的不覆盖）' : ''}`);
+    if (pRs.kind === 'trae') await restartAfterAccountChange(pRs);
+    say('');
+    printAccounts(pRs, accountsFor(pRs));
+    return 0;
+  }
+
+  if (mergeCmd) {
+    // 「合并」在没有 domain_id 的账号上无法可靠判定归属，所以这里不做自动合并，
+    // 只把可能的重复列出来，由用户指定删哪条（等价于 delete 的批量预览）。
+    if (!rest.length) {
+      return fail('需要指定供应商', `用法：node router.mjs account merge codearts [--dry-run]`);
+    }
+    const resolvedMg = resolveId(rest[0]);
+    if (resolvedMg.error) return fail(resolvedMg.error, `可选：${PROVIDERS.map((q) => q.id).join('、')}`);
+    const pMg = resolvedMg.p;
+    if (pMg.kind !== 'codearts') {
+      return fail('只有 CodeArts 会出现这种重复记录（每次浏览器登录新增一条）');
+    }
+    const upMg = (await probePort(pMg.port, 1200)).up;
+    if (!upMg) {
+      return fail('需要网关在线才能比对账号归属', `先启动：node router.mjs up ${pMg.id}`);
+    }
+    const groups = await codeartsSameAccountGroups(pMg.port);
+    if (!groups.length) {
+      ok('没有发现同一账号的重复记录');
+      return 0;
+    }
+    say(`${C.bold}同一账号的重复记录${C.reset} ${pMg.title}  ${dim(`${groups.length} 组`)}`);
+    for (const g of groups) {
+      const c = g.credit || {};
+      say(`  ${dim(`用量指纹 token_used=${c.token_used} total=${c.total} used=${c.used}`)}`);
+      for (const a of g.accounts) {
+        const tag = a.status === 'ok' ? C.ok : C.bad;
+        say(`    ${tag} ${padEnd(a.name, 22)} ${dim(`${a.id} · ${a.source || '?'} · ${a.status || '?'}`)}`);
+      }
+    }
+    if (dryRun) return 0;
+
+    // 每组只保留一条。默认保留桌面端那条（能跟随 IDE 续期）；`--keep browser`
+    // 或 `--keep <id>` 可以指定保留浏览器登录的记录。
+    const prefer = String(process.env.ROUTER_CODEARTS_KEEP || '').trim();
+    const drop = [];
+    for (const g of groups) {
+      const list = g.accounts;
+      let keep;
+      if (prefer && list.some((a) => a.id === prefer || a.name === prefer)) {
+        keep = list.find((a) => a.id === prefer || a.name === prefer);
+      } else if (prefer === 'browser') {
+        keep = list.find((a) => a.source === 'browser' && a.status === 'ok') || list[0];
+      } else {
+        keep = list.find((a) => a.user_data) || list.find((a) => a.status === 'ok') || list[0];
+      }
+      say(`  ${C.ok} 保留  ${padEnd(keep.name, 22)} ${dim(`${keep.id} · ${keep.source || '?'}`)}`);
+      drop.push(...list.filter((a) => a.id !== keep.id));
+    }
+    if (!drop.length) {
+      ok('没有需要移除的记录');
+      return 0;
+    }
+    say('');
+    for (const a of drop) say(`  ${C.dim}-${C.reset} 移除  ${padEnd(a.name, 22)} ${dim(a.id)}`);
+    for (const a of drop) {
+      await fetchJson(`http://127.0.0.1:${pMg.port}/admin/api/accounts`, {
+        method: 'POST',
+        headers: codeartsAdminHeaders(),
+        body: JSON.stringify({ action: 'remove', id: a.id }),
+        timeout: 8000,
+      }).catch(() => {});
+    }
+    ok(`已移除 ${drop.length} 条重复记录`);
+    say('');
+    printAccounts(pMg, accountsFor(pMg));
+    return 0;
+  }
+
+  if (checkCmd) {
+    // 体检模式：只报有问题的账号，正常时不啰嗦
+    const list = rest.length
+      ? rest.map((x) => resolveId(x)).filter((r) => !r.error).map((r) => r.p)
+      : PROVIDERS;
+    if (!list.length) return fail('没有可检查的供应商', `可选：${PROVIDERS.map((q) => q.id).join('、')}`);
+
+    const payload = [];
+    let issues = 0;
+    for (const pc of list) {
+      const pool = accountsFor(pc);
+      const bad = accountIssues(pc, pool);
+      issues += bad.length;
+      payload.push({ ...accountJson(pc, pool), issues: bad.map(publicAccount) });
+      if (!json) {
+        if (!pool.length) {
+          say(`${C.warn} ${padEnd(pc.title, 20)} 没有账号`);
+          issues += 1;
+        } else if (!bad.length) {
+          const total = pool.length;
+          say(`${C.ok} ${padEnd(pc.title, 20)} ${dim(`${total} 个账号都正常`)}`);
+        } else {
+          say(`${C.warn} ${padEnd(pc.title, 20)} ${bad.length} 个账号需要处理`);
+          for (const a of bad) {
+            const tag = a.health.level === 'error' ? C.bad : C.warn;
+            say(`  ${tag} ${padEnd(a.name, 20)} ${dim(a.key)}  ${a.health.notes.join('；')}`);
+            say(`     ${dim(accountFixHint(pc, a))}`);
+          }
+        }
+        // CodeArts 每次浏览器登录都会新增一条，可能和已有账号是同一个人。
+        // 用套餐用量指纹去比对（不按名字猜），发现重复才提示。
+        if (pc.kind === 'codearts' && (await probePort(pc.port, 800)).up) {
+          const dupGroups = await codeartsSameAccountGroups(pc.port);
+          if (dupGroups.length) {
+            const extra = dupGroups.reduce((n, g) => n + g.accounts.length - 1, 0);
+            say(`  ${C.warn} ${extra} 条重复记录（与已有账号是同一人，网关不认）`);
+            for (const g of dupGroups) {
+              const names = g.accounts.map((a) => a.name).join(' / ');
+              say(`     ${dim(names)}`);
+            }
+            say(`     ${dim(`确认后合并：node router.mjs account merge ${pc.id}`)}`);
+            issues += 1;
+          }
+        }
+      }
+    }
+    if (json) {
+      console.log(
+        JSON.stringify({ schemaVersion: 1, generatedAt: new Date().toISOString(), providers: payload }, null, 2),
+      );
+      return issues ? 1 : 0;
+    }
+    say('─'.repeat(92));
+    if (issues === 0) say(`${C.ok} 所有账号都正常`);
+    else say(`${C.warn} ${issues} 个账号需要处理`);
+    return issues ? 1 : 0;
+  }
+
+  if (!rest.length) {
+    if (all) return fail('--all 需要指定供应商，例如：node router.mjs account codearts --all');
+    return listAllAccounts({ json });
+  }
+
+  const resolved = resolveId(rest[0]);
+  if (resolved.error) {
+    return fail(resolved.error, `可选：${PROVIDERS.map((p) => p.id).join('、')}`);
+  }
+  const p = resolved.p;
+  const accounts = accountsFor(p);
+
+  if (rest.length === 1 && !all) {
+    if (json) {
+      console.log(
+        JSON.stringify(
+          {
+            schemaVersion: 1,
+            generatedAt: new Date().toISOString(),
+            provider: accountJson(p, accounts),
+          },
+          null,
+          2,
+        ),
+      );
+      return 0;
+    }
+    printAccounts(p, accounts);
+    return 0;
+  }
+  if (all && rest.length > 1) return fail('--all 不能同时指定账号');
+  if (rest.length > 2) {
+    return fail(
+      `参数太多：${rest.slice(2).join(' ')}`,
+      `用法：node router.mjs account ${p.id} [编号 | key | 名称] [--all] [--dry-run]`,
+    );
+  }
+  if (!accounts.length) {
+    return fail(`${p.title} 没有可用账号`, `登录：node router.mjs login ${p.id}`);
+  }
+
+  OUTPUT_BUF.length = 0;
+  if (json) MUTE_OUTPUT = true;
+  let code;
+  try {
+    code = all ? await switchAllAccounts(p, { dryRun }) : await switchAccount(p, accounts, rest[1], { dryRun });
+  } finally {
+    MUTE_OUTPUT = false;
+  }
+
+  if (json) {
+    const messages = OUTPUT_BUF.map((s) => s.replace(/\x1b\[[0-9;]*m/g, ''));
+    console.log(
+      JSON.stringify(
+        {
+          ok: code === 0,
+          provider: p.id,
+          action: all ? (dryRun ? 'dry-run-all' : 'all') : dryRun ? 'dry-run' : 'switch',
+          target: all ? null : rest[1],
+          accounts: accountsFor(p).map(publicAccount),
+          ...(code === 0 ? {} : { messages: messages.slice(-6) }),
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  return code;
 }
 
 /** Trae 的 tw2api 启动环境；key 优先读它自己的 .env.local，其次复用 pi 里的。 */
@@ -321,7 +2338,7 @@ function workbuddyArgs(region, port) {
 //   - 停止时先按 PID 树杀，再按监听端口兜底
 //   - 登录自启由 `service install` 生成 router-<id> 计划任务
 //
-// 加第七家：在这里加一项；并在 scripts/health.mjs 的 SOURCES 里加一行。
+// 加新一家：在这里加一项；并在 scripts/health.mjs 的 SOURCES 里加一行。
 
 const PROVIDERS = [
   {
@@ -454,6 +2471,162 @@ const PROVIDERS = [
     ocName: 'CodeArts Agent（华为云）',
   },
   {
+    id: 'zcode',
+    title: 'ZCode (Z.ai)',
+    port: 20131,
+    kind: 'zcode',
+    control: 'spawn',
+    // zcode-bridge（MIT，Go 标准库单二进制）：把 ZCode 的编程套餐额度
+    // 变成 /v1/chat/completions + /v1/messages 两种方言。
+    // 它自己在账号池里轮询，router 只负责拉起、看账号和写 opencode provider。
+    processes: [
+      {
+        name: 'zcode-bridge',
+        port: 20131,
+        command: () => resolveExecutable(ZCODE_DIR, ['zcode-bridge.exe', 'zcode-bridge']),
+        args: () => [],
+        cwd: () => ZCODE_DIR,
+        // 账号文件固定在仓库内，避免 cwd 不同导致读到另一份
+        env: () => ({ ZCODE_ACCOUNTS_FILE }),
+        log: () => path.join(ZCODE_DIR, 'run.log'),
+        errLog: () => path.join(ZCODE_DIR, 'run.log'),
+        waitMs: 20000,
+      },
+    ],
+    logs: [path.join(ZCODE_DIR, 'run.log')],
+    ocProvider: 'zcode',
+    ocName: 'ZCode（Z.ai）',
+  },
+  {
+    id: 'loomy',
+    title: 'Loomy（讯飞）',
+    port: 8791,
+    kind: 'loomy',
+    control: 'spawn',
+    // 本仓库自写的零依赖 Node 反代：读 Loomy 桌面端的 auth-session.json，
+    // 把 imodel 网关转成 OpenAI 兼容端点；模型清单只取对话模型（type=chat）。
+    processes: [
+      {
+        name: 'loomy-proxy',
+        port: 8791,
+        command: () => process.execPath,
+        args: () => {
+          const script = path.join(LOOMY_DIR, 'loomy-proxy.js');
+          if (!fs.existsSync(script)) throw new Error(`找不到 loomy-proxy.js：${script}`);
+          return [script, '--port', '8791'];
+        },
+        cwd: () => LOOMY_DIR,
+        env: () => ({}),
+        log: () => path.join(RUN_DIR, 'loomy.log'),
+        errLog: () => path.join(RUN_DIR, 'loomy.log'),
+        ensureDirs: [RUN_DIR],
+        waitMs: 15000,
+      },
+    ],
+    logs: [path.join(RUN_DIR, 'loomy.log')],
+    ocProvider: 'loomy',
+    ocName: 'Loomy（讯飞 iModel）',
+    ocApiKey: 'loomy-local',
+    // 上游把生图模型也列在 /models 里；它们不能走 chat/completions。
+    modelsPath: '/models?type=chat',
+  },
+  {
+    id: 'raccoon',
+    title: '商汤小浣熊',
+    port: 8793,
+    kind: 'raccoon',
+    control: 'spawn',
+    // 本仓库自写的零依赖 Node 反代：读桌面端 agent/config/auth.json 的 IAM token，
+    // 上游（xiaohuanxiong.com/api/web/llm/v2）本来就吐 OpenAI 格式，代理只补鉴权、
+    // 模型目录（model_catalog）与积分（points/v1/balance）。
+    processes: [
+      {
+        name: 'raccoon-proxy',
+        port: 8793,
+        command: () => process.execPath,
+        args: () => {
+          const script = path.join(RACCOON_DIR, 'raccoon-proxy.js');
+          if (!fs.existsSync(script)) throw new Error(`找不到 raccoon-proxy.js：${script}`);
+          return [script, '--port', '8793'];
+        },
+        cwd: () => RACCOON_DIR,
+        env: () => ({}),
+        log: () => path.join(RUN_DIR, 'raccoon.log'),
+        errLog: () => path.join(RUN_DIR, 'raccoon.log'),
+        ensureDirs: [RUN_DIR],
+        waitMs: 15000,
+      },
+    ],
+    logs: [path.join(RUN_DIR, 'raccoon.log')],
+    ocProvider: 'raccoon',
+    ocName: '商汤小浣熊（Raccoon Work）',
+    ocApiKey: 'raccoon-local',
+  },
+  {
+    id: 'qwenwork',
+    title: '千问办公',
+    port: 8794,
+    kind: 'qwenwork',
+    control: 'spawn',
+    // 本仓库自写的零依赖 Node 反代：从桌面端的 OSCrypt 容器里读 MaaS key，
+    // 再用 /v1/access-tokens/exchange 自持续期。上游原生支持两种方言，
+    // 所以 OpenAI 与 Anthropic 两条路径都直接透传，不做协议转换。
+    processes: [
+      {
+        name: 'qwenwork-proxy',
+        port: 8794,
+        command: () => process.execPath,
+        args: () => {
+          const script = path.join(QWENWORK_DIR, 'qwenwork-proxy.js');
+          if (!fs.existsSync(script)) throw new Error(`找不到 qwenwork-proxy.js：${script}`);
+          return [script, '--port', '8794'];
+        },
+        cwd: () => QWENWORK_DIR,
+        env: () => ({}),
+        log: () => path.join(RUN_DIR, 'qwenwork.log'),
+        errLog: () => path.join(RUN_DIR, 'qwenwork.log'),
+        ensureDirs: [RUN_DIR],
+        waitMs: 20000,
+      },
+    ],
+    logs: [path.join(RUN_DIR, 'qwenwork.log')],
+    ocProvider: 'qwenwork',
+    ocName: '千问办公（QwenWork）',
+    ocApiKey: 'qwenwork-local',
+  },
+  {
+    id: 'dumate',
+    title: '百度搭子',
+    port: 8795,
+    kind: 'dumate',
+    control: 'spawn',
+    // 本仓库自写的零依赖 Node 反代：桌面端 main-server 的端口每次启动随机，
+    // 代理从 electron.log / 进程命令行发现端口，读落盘的 opencode.json 模型表，
+    // 再透传它免鉴权的 /api/qianfanproxy/v1。
+    processes: [
+      {
+        name: 'dumate-proxy',
+        port: 8795,
+        command: () => process.execPath,
+        args: () => {
+          const script = path.join(DUMATE_DIR, 'dumate-proxy.js');
+          if (!fs.existsSync(script)) throw new Error(`找不到 dumate-proxy.js：${script}`);
+          return [script, '--port', '8795'];
+        },
+        cwd: () => DUMATE_DIR,
+        env: () => ({}),
+        log: () => path.join(RUN_DIR, 'dumate.log'),
+        errLog: () => path.join(RUN_DIR, 'dumate.log'),
+        ensureDirs: [RUN_DIR],
+        waitMs: 15000,
+      },
+    ],
+    logs: [path.join(RUN_DIR, 'dumate.log')],
+    ocProvider: 'dumate',
+    ocName: '百度搭子（DuMate）',
+    ocApiKey: 'dumate-local',
+  },
+  {
     id: 'workbuddy',
     title: 'WorkBuddy 国内版',
     port: 8787,
@@ -512,6 +2685,36 @@ const PROVIDERS = [
     ocAdd: ['workbuddy2pi', 'global', 'opencode', 'install'],
     ocRemove: ['workbuddy2pi', 'global', 'opencode', 'uninstall'],
     ocProvider: 'workbuddy-global',
+  },
+  {
+    // 统一网关：把上面十家合成一个端口 + 两种方言。
+    // 它不是反代（没有上游），所以 processes 里只有一个 node 进程，且**不写 opencode**
+    // ——是否把客户端切到网关上由用户决定（`router gateway install` 会写一份 provider）。
+    id: 'gateway',
+    title: '统一网关',
+    port: GATEWAY_PORT,
+    kind: 'gateway',
+    control: 'spawn',
+    processes: [
+      {
+        name: 'router-gateway',
+        port: GATEWAY_PORT,
+        command: () => process.execPath,
+        args: () => [path.join(GATEWAY_DIR, 'server.mjs')],
+        cwd: () => HERE,
+        env: () => ({}),
+        log: () => path.join(RUN_DIR, 'gateway.log'),
+        errLog: () => path.join(RUN_DIR, 'gateway.log'),
+        ensureDirs: [RUN_DIR],
+        waitMs: 15000,
+      },
+    ],
+    logs: [path.join(RUN_DIR, 'gateway.log')],
+    // 网关的模型目录是十家的并集，由它自己按需拉取，所以不参与 router 的写 provider 流程
+    ocProvider: 'router-gateway',
+    ocName: 'router 统一网关',
+    ocApiKey: 'router-local',
+    gateway: true,
   },
 ];
 
@@ -701,6 +2904,13 @@ function portPids(port) {
     const pid = Number(line.trim());
     if (Number.isFinite(pid) && pid > 0) pids.add(pid);
   }
+  if (pids.size) return [...pids];
+  // 最小化 Linux 环境不一定装 lsof，用 iproute2 的 ss 兜底。
+  const s = spawnSync('ss', ['-ltnp', `sport = :${port}`], { encoding: 'utf8' });
+  for (const m of (s.stdout || '').matchAll(/pid=(\d+)/g)) {
+    const pid = Number(m[1]);
+    if (Number.isFinite(pid) && pid > 0) pids.add(pid);
+  }
   return [...pids];
 }
 
@@ -750,10 +2960,10 @@ async function waitPortDown(port, timeoutMs, interval = 400) {
   return false;
 }
 
-async function fetchModels(port, apiKey, timeout = 6000) {
+async function fetchModels(port, apiKey, timeout = 6000, modelsPath = '/models') {
   try {
     const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-    const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+    const res = await fetch(`http://127.0.0.1:${port}/v1${modelsPath}`, {
       headers,
       signal: AbortSignal.timeout(timeout),
     });
@@ -771,17 +2981,35 @@ function INTERNAL_MODEL_ID(id) {
   return /^custom_model|_(sub)?agent(_v\d)?$|^summary$|^computer_use|^browser_use|^file_search/.test(String(id || ''));
 }
 
+/** opencode.json 里某个 provider 的模型数；没配置时返回 null。 */
+function ocModelCount(providerId) {
+  const mod = requireShared('opencode-config.js');
+  if (mod && typeof mod.providerModelCount === 'function') {
+    try {
+      return mod.providerModelCount(providerId);
+    } catch {}
+  }
+  return null;
+}
+
 async function modelCount(provider) {
-  const models = await fetchModels(provider.port, keyFor(provider.id));
+  // WorkBuddy 反代的 /v1/models 是包作者猜的静态表（见 docs/02-pitfalls.md P3），
+  // 和客户端实际能选的模型对不上。客户端从 pi 扩展拿真实目录，所以这里优先报
+  // opencode 里已经写好的数量，回退时才看反代表。
+  if (provider.kind === 'workbuddy') {
+    const configured = ocModelCount(provider.ocProvider);
+    if (configured !== null) return configured;
+  }
+  const models = await fetchModels(provider.port, keyFor(provider.id), 6000, provider.modelsPath || '/models');
   if (!models) return null;
   // 和写 opencode 时用同一份过滤，否则表格里的数字比客户端实际能选的多数十个
   const usable = provider.ocSkip ? models.filter((m) => !provider.ocSkip(m.id || m.slug)) : models;
   return usable.length;
 }
 
-async function fetchModelsRetry(port, apiKey, attempts = 3) {
+async function fetchModelsRetry(port, apiKey, attempts = 3, modelsPath = '/models') {
   for (let i = 0; i < attempts; i++) {
-    const models = await fetchModels(port, apiKey);
+    const models = await fetchModels(port, apiKey, 6000, modelsPath);
     if (models) return models;
     await sleep(1000 * (i + 1));
   }
@@ -1126,8 +3354,95 @@ async function loginTrae(p) {
   return true;
 }
 
+/** 清掉 CodeArts 某账号的历史失败计数（只清状态，不碰凭证）。 */
+async function clearCodeartsErrors(p, accountId) {
+  if (!accountId) return;
+  try {
+    await fetchJson(`http://127.0.0.1:${p.port}/admin/api/accounts`, {
+      method: 'POST',
+      headers: codeartsAdminHeaders(),
+      body: JSON.stringify({ action: 'clear-errors', id: accountId }),
+      timeout: 5000,
+    });
+  } catch {}
+}
+
+/**
+ * CodeArts 的浏览器登录**不会更新旧账号**，而是每次都追加一条。
+ *
+ * 网关按 `user_data` 或 `access_key` 判断「同一个账号」（store.UpsertAccount），
+ * 但浏览器登录这条路径两者都给不出：`user_data` 为空，`access_key` 每次登录
+ * 都是新签发的 STS。`CallerIdentity` 本可以补上 domain_id，但它在这条链路上
+ * 取不到（返回空），于是每次 `login --force` 都会在池子里多一条同账号记录。
+ *
+ * 结果就是「重登一次，账号池多一条」，轮询时一半请求打在旧凭据上照样失败。
+ * 网关源码是第三方的，不在这里改；router 侧做两件事：
+ *   1. 登录前后对比，发现「新增而不是更新」就明确告知；
+ *   2. 提供 merge 把同一 domain 的重复账号收敛成一条（保留可用的那条）。
+ */
+function codeartsDuplicateGroups() {
+  const data = readJsonFile(CODEARTS_DATA_FILE);
+  const accounts = (data && Array.isArray(data.accounts) && data.accounts) || [];
+  const byDomain = new Map();
+  for (const a of accounts) {
+    const domain = a.session && a.session.domain_id;
+    // 只按 domain_id 归组：这是网关注入的稳定账号标识，桌面端导入的账号都有。
+    // 浏览器登录路径拿不到它（见上面注释），那些账号无法可靠判定归属，
+    // 宁可不动也不要按名字猜——名字是 AccessKey 前缀，每次登录都不同。
+    if (!domain) continue;
+    if (!byDomain.has(domain)) byDomain.set(domain, []);
+    byDomain.get(domain).push(a);
+  }
+  return [...byDomain.values()].filter((g) => g.length > 1);
+}
+
+/** 账号池里有多少条「无法判定归属」的浏览器登录记录（每次重登 +1）。 */
+function codeartsOrphanLogins() {
+  const data = readJsonFile(CODEARTS_DATA_FILE);
+  const accounts = (data && Array.isArray(data.accounts) && data.accounts) || [];
+  return accounts.filter((a) => !(a.session && a.session.domain_id));
+}
+
+/**
+ * 按**套餐用量指纹**找出同一账号的重复记录。
+ *
+ * `domain_id` 在浏览器登录路径拿不到，`resource_id` 也不稳定（要上游返回套餐详情
+ * 才有，多数时候是 null）。但 `/admin/api/credits` 的**累计用量**是稳定的：
+ * 同一个华为云账号查询到 `token_used` / `total` / `used` 完全相同，不同账号不会撞。
+ * 实测：`hw000000000000000` 与 `CodeArts HSTADEMO1` 都是
+ * `token_used=947496598, total=7600, used=6610.75`；另一账号是
+ * `221038131 / 6600 / 2322.98`，一眼可分。
+ *
+ * 这只用来**发现重复**，删除仍要用户确认——用量相同的两个套餐理论上也可能
+ * 是「同一账号下的两个套餐」，那种情况该保留还是删由人判断。
+ */
+async function codeartsSameAccountGroups(port) {
+  const accounts = ((readJsonFile(CODEARTS_DATA_FILE) || {}).accounts || []).filter(Boolean);
+  const byFingerprint = new Map();
+  for (const a of accounts) {
+    let fp = null;
+    let detail = null;
+    try {
+      const j = await fetchJson(
+        `http://127.0.0.1:${port}/admin/api/credits?id=${encodeURIComponent(a.id)}&fresh=1`,
+        { timeout: 8000 },
+      );
+      const c = j && Array.isArray(j.accounts) ? j.accounts[0] && j.accounts[0].credit : null;
+      if (c && c.token_used != null) {
+        fp = [c.total, c.used, c.token_used, c.reset_date].join('|');
+        detail = c;
+      }
+    } catch {}
+    if (!fp) continue;
+    if (!byFingerprint.has(fp)) byFingerprint.set(fp, { accounts: [], credit: detail });
+    byFingerprint.get(fp).accounts.push(a);
+  }
+  return [...byFingerprint.values()].filter((g) => g.accounts.length > 1);
+}
+
 async function loginCodearts(p) {
   const up = await probePort(p.port, 1000);
+  const beforeIds = new Set(accountsFor(p).map((a) => a.key));
   if (!up.up) {
     say(dim('  · 先启动 CodeArts 网关，浏览器登录要走它的 /admin/api/login'));
     const failed = await doUp([p], { quiet: true });
@@ -1180,6 +3495,17 @@ async function loginCodearts(p) {
     }
     if (poll && (poll.status === 'confirmed' || poll.account_id)) {
       ok(`CodeArts 浏览器登录成功${poll.account_name ? `（${poll.account_name}）` : ''}`);
+      // 重新登录后把该账号的失败计数清零：否则它会一直停在 status=error，
+      // 每次 list/account 都提示「需要重新登录」，而其实刚登录过。
+      await clearCodeartsErrors(p, poll.account_id || poll.id);
+      // 这条登录路径每次都会新增账号而不是更新旧的（见 codeartsDuplicateGroups 注释）
+      const after = accountsFor(p).map((a) => a.key);
+      const added = after.filter((k) => !beforeIds.has(k));
+      if (added.length && beforeIds.size) {
+        warn(`这次登录在账号池里新增了 ${added.length} 条记录，而不是更新旧账号`);
+        say(dim('  CodeArts 的浏览器登录每次都会拿到新 STS，网关认不出是同一个账号'));
+        say(dim(`  合并重复：node router.mjs account merge ${p.id}`));
+      }
       return true;
     }
     if (poll && ['failed', 'expired', 'canceled'].includes(poll.status)) {
@@ -1191,9 +3517,540 @@ async function loginCodearts(p) {
   return false;
 }
 
+// ---------------------------------------------------------------- ZCode
+//
+// zcode-bridge 自己就是一个完整的账号环：`login` 走 OAuth 设备码，账号写在
+// data/accounts.json（0600），轮询、续期、失败冷却都在它内部完成。
+// 所以 router 这边只需要：拉起进程、调它的 CLI 做增删/设默认、读账号文件展示。
+
+function zcodeExe() {
+  return resolveExecutable(ZCODE_DIR, ['zcode-bridge.exe', 'zcode-bridge']);
+}
+
+/** 同步跑一次 zcode-bridge 的账号子命令，返回 {ok, out}。 */
+function runZcodeCli(args) {
+  const exe = zcodeExe();
+  if (!fs.existsSync(exe)) return { ok: false, out: `找不到 zcode-bridge：${exe}` };
+  const r = spawnSync(exe, args, {
+    cwd: ZCODE_DIR,
+    env: { ...process.env, ZCODE_ACCOUNTS_FILE },
+    encoding: 'utf8',
+    timeout: 30000,
+    windowsHide: true,
+  });
+  return { ok: r.status === 0, status: r.status, out: `${r.stdout || ''}${r.stderr || ''}`.trim() };
+}
+
+/**
+ * 登录：走设备码，bridge 打印授权链接后轮询。
+ * 链接一出现就自动打开浏览器；用户确认后 CLI 自己写账号文件。
+ */
+async function loginZcode(p, { label = '' } = {}) {
+  const exe = zcodeExe();
+  if (!fs.existsSync(exe)) {
+    bad(`找不到 zcode-bridge：${exe}`);
+    say(dim('  构建：cd integrations/zcode-bridge && go build -o zcode-bridge.exe ./cmd/zcode-bridge'));
+    return false;
+  }
+  say(`  ${dim('ZCode 会给一个授权链接；在已登录 Z.ai 的浏览器里确认即可。')}`);
+
+  const args = ['login'];
+  if (label) args.push('--label', label);
+
+  const before = new Set(zcodeAccounts().map((a) => a.key));
+  const child = spawn(exe, args, {
+    cwd: ZCODE_DIR,
+    env: { ...process.env, ZCODE_ACCOUNTS_FILE },
+    windowsHide: false,
+  });
+
+  let opened = false;
+  const handle = (buf) => {
+    const text = buf.toString();
+    process.stdout.write(text);
+    if (!opened) {
+      const m = text.match(/https:\/\/[^\s)]+/);
+      if (m) {
+        opened = openBrowser(m[0]);
+        if (!opened) say(dim(`  · 浏览器没有自动打开，请手动复制上面的链接`));
+      }
+    }
+  };
+  child.stdout.on('data', handle);
+  child.stderr.on('data', handle);
+
+  const code = await new Promise((res) => {
+    child.on('exit', (c) => res(c));
+    child.on('error', () => res(-1));
+  });
+  if (code !== 0) {
+    bad(`ZCode 登录未完成（退出码 ${code}）`);
+    return false;
+  }
+
+  const st = zcodeAuth();
+  if (!st.ok) {
+    bad('登录流程结束，但账号池里仍没有可用授权');
+    return false;
+  }
+  ok(`ZCode ${st.label}`);
+  const added = zcodeAccounts().filter((a) => !before.has(a.key));
+  if (added.length) {
+    ok(`已添加 ${added.length} 个账号：${added.map((a) => `${a.key}（${a.name}）`).join('、')}`);
+  }
+  return true;
+}
+
+/** 切换轮询头：bridge 的 default 账号排在最前。 */
+async function switchZcodeAccount(p, target, { dryRun = false } = {}) {
+  if (target.active) {
+    ok(`当前已经是账号 ${target.key}（${target.name}）`);
+    return 0;
+  }
+  if (dryRun) {
+    say(`\x1b[1;33m[dry-run]\x1b[0m 将把 ${p.title} 的轮询头切到 ${target.key}（${target.name}）`);
+    return 0;
+  }
+  const r = runZcodeCli(['login', '--set-default', String(target.key)]);
+  if (!r.ok) {
+    bad(`设置默认账号失败：${r.out}`);
+    return 1;
+  }
+  ok(`已切换 ${p.title} 到账号 ${target.key}（${target.name}）`);
+  say('');
+  printAccounts(p, accountsFor(p));
+  return 0;
+}
+
+async function removeZcodeAccount(p, target, { dryRun = false } = {}) {
+  if (target.key === '(desktop)') {
+    return { error: '桌面端凭据不归 router 管，请在 ZCode 桌面端退出登录' };
+  }
+  if (target.key === '(pinned)') {
+    return {
+      error: '固定凭据来自 plan-jwt.json',
+      hint: `要删除请手动删 ${path.join(ZCODE_DIR, 'plan-jwt.json')}，或改回用桌面端凭据`,
+    };
+  }
+  if (dryRun) {
+    say(`\x1b[1;33m[dry-run]\x1b[0m 将删除 ZCode 的账号 ${target.key}（${target.name}）`);
+    return { ok: true };
+  }
+  const data = zcodeStore();
+  const rec = (data.accounts || []).find((a) => a.id === target.key);
+  const dir = path.join(ZCODE_DIR, 'retired-' + stampNow());
+  const archived = rec
+    ? (() => {
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          const dest = path.join(dir, `${target.key}.json`);
+          fs.writeFileSync(dest, `${JSON.stringify(rec, null, 2)}\n`, { mode: 0o600 });
+          return dest;
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  const r = runZcodeCli(['login', '--remove', String(target.key)]);
+  if (!r.ok) return { error: `删除失败：${r.out}` };
+  return { ok: true, archived };
+}
+
+// ---------------------------------------------------------------- ZCode 领取
+//
+// 国内版 ZCode 会在周末/夜间放出限时 Token 套餐（ZCODE WEEKEND BUILD 之类），
+// 需要在桌面端手动点“领取”。协议来自 MIT 项目 L0NE-6/ZCode-Daily：
+//   GET  /api/v1/zcode-plan/billing/preview?app_version=&platform=
+//   POST /api/v1/zcode-plan/billing/claim  {"plan_id": "..."}
+// 两者都要 Bearer JWT + X-Device-Mid。这里用 Node 直接实现，不引入 Python 依赖。
+
+const ZCODE_ORIGIN = 'https://zcode.z.ai';
+const ZCODE_APP_VERSION = '3.18.0';
+const ZCODE_DEVICE_FILE = path.join(ZCODE_DIR, 'data', 'device-mid.txt');
+
+/** 领取用的设备指纹：首次生成后固定，换设备重新生成即可。 */
+function zcodeDeviceMid() {
+  try {
+    const saved = fs.readFileSync(ZCODE_DEVICE_FILE, 'utf8').trim();
+    if (saved) return saved;
+  } catch {}
+  const id = randomUUID();
+  try {
+    fs.mkdirSync(path.dirname(ZCODE_DEVICE_FILE), { recursive: true });
+    fs.writeFileSync(ZCODE_DEVICE_FILE, `${id}\n`, { mode: 0o600 });
+  } catch {}
+  return id;
+}
+
+/**
+ * 读 ZCode 桌面端凭据里的 plan JWT。
+ * 与 zcode-bridge 同样的 KDF：Electron 用 process.platform（Windows 上是 win32）
+ * 和不带域名的用户名，Go/Node 的默认实现都拿不到，这里显式对齐。
+ */
+function zcodeDesktopJwt() {
+  const stateDir =
+    process.env.ZCODE_STATE_DIR || path.join(HOME, '.zcode', 'v2');
+  const file = path.join(stateDir, 'credentials.json');
+  const rec = readJsonFile(file);
+  const value = rec && rec.zcodejwttoken;
+  if (typeof value !== 'string' || !value) return null;
+  if (!value.startsWith('enc:v1:')) return value || null;
+
+  let username = '';
+  try {
+    username = os.userInfo().username;
+  } catch {}
+  if (!username) username = process.env.USERNAME || '';
+  username = username.split(/[\\/]/).pop();
+
+  const platform = process.platform; // win32 / darwin / linux
+  const key = createHash('sha256')
+    .update(`zcode-credential-fallback:${platform}:${HOME}:${username}`)
+    .digest();
+  const [iv, tag, data] = value.slice('enc:v1:'.length).split('.');
+  try {
+    const d = createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64url'));
+    d.setAuthTag(Buffer.from(tag, 'base64url'));
+    return Buffer.concat([d.update(Buffer.from(data, 'base64url')), d.final()]).toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** 领取用哪个 token：账号池 → plan-jwt.json → 桌面端凭据（与 bridge 的解析顺序一致）。 */
+function zcodeClaimToken() {
+  const data = zcodeStore();
+  const list = (data.accounts || []).filter((a) => a && a.jwt && !a.needsReauth);
+  const pick = list.find((a) => a.id === data.default) || list[0];
+  if (pick) return { jwt: pick.jwt, who: pick.label || pick.email || pick.id };
+  const pinned = zcodeSingleToken();
+  if (pinned && typeof pinned.jwt === 'string' && pinned.jwt) {
+    return { jwt: pinned.jwt, who: 'plan-jwt.json' };
+  }
+  const desk = zcodeDesktopJwt();
+  if (desk) return { jwt: desk, who: 'ZCode 桌面端' };
+  return null;
+}
+
+async function zcodeApi(pathname, { jwt, device, method = 'GET', body } = {}) {
+  const headers = {
+    accept: 'application/json',
+    authorization: `Bearer ${jwt}`,
+    'x-device-mid': device,
+    'x-client-language': 'zh-CN',
+    'x-zcode-app-version': ZCODE_APP_VERSION,
+    'x-platform': process.platform === 'win32' ? 'win32' : process.platform,
+  };
+  if (body) headers['content-type'] = 'application/json';
+  const res = await fetch(`${ZCODE_ORIGIN}${pathname}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(20000),
+  });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {}
+  return { status: res.status, json, text };
+}
+
+function fmtUnix(sec) {
+  const n = Number(sec);
+  if (!Number.isFinite(n) || n <= 0) return '?';
+  return new Date(n * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+}
+
+/**
+ * 领取当前可领的限时套餐。
+ * 已领过的活动上游会回 1003（按成功处理）；没必要重复领取。
+ */
+async function claimZcode({ dryRun = false, only = null } = {}) {
+  const cred = zcodeClaimToken();
+  if (!cred) {
+    return { error: '没有可用的 ZCode 凭据', hint: 'node router.mjs login zcode（或确认 ZCode 桌面端已登录）' };
+  }
+  const device = zcodeDeviceMid();
+  if (!dryRun) say(dim(`  使用凭据：${cred.who}`));
+
+  const prev = await zcodeApi(
+    `/api/v1/zcode-plan/billing/preview?app_version=${ZCODE_APP_VERSION}&platform=${process.platform === 'win32' ? 'win32' : process.platform}`,
+    { jwt: cred.jwt, device },
+  );
+  if (prev.status === 401) {
+    return { error: '登录状态失效（401）', hint: 'node router.mjs login zcode' };
+  }
+  if (prev.status === 404) return { ok: true, skipped: '领取接口未上线（404）' };
+  const plans = (prev.json && prev.json.data && Array.isArray(prev.json.data.plans) ? prev.json.data.plans : []).filter(
+    (p) => p && p.plan_id,
+  );
+
+  if (!plans.length) {
+    // 再看一眼当前已有套餐，确认是“已领取”还是“本期没有活动”
+    const cur = await zcodeApi('/api/v1/zcode-plan/billing/current', { jwt: cred.jwt, device }).catch(() => null);
+    const active =
+      cur && cur.json && cur.json.data && Array.isArray(cur.json.data.plans) ? cur.json.data.plans : [];
+    if (active.length) {
+      const names = active.map((p) => `${p.name || p.plan_id}（至 ${fmtUnix(p.ends_at)}）`).join('、');
+      return { ok: true, active, message: `当前没有可领的新套餐；已生效：${names}` };
+    }
+    return { ok: true, message: '当前没有可领的套餐（本期活动未开放或已领完）' };
+  }
+
+  const wanted = only || '';
+  const target = wanted ? plans.find((p) => p.plan_id === wanted) : plans.sort((a, b) => (b.priority || 0) - (a.priority || 0))[0];
+  if (!target) return { error: `预览里没有 plan_id = ${wanted}` };
+
+  const title = `${target.name || target.plan_id}（priority ${target.priority ?? '?'}，${fmtUnix(target.starts_at)} → ${fmtUnix(target.ends_at)}）`;
+  if (dryRun) return { ok: true, dryRun: true, message: `可领取：${title}`, plans };
+
+  const claimed = await zcodeApi('/api/v1/zcode-plan/billing/claim', {
+    jwt: cred.jwt,
+    device,
+    method: 'POST',
+    body: { plan_id: target.plan_id },
+  });
+  const code = claimed.json && claimed.json.code;
+  if (claimed.status === 200 && (code === 0 || code === undefined)) {
+    return { ok: true, claimed: true, message: `已领取：${title}` };
+  }
+  if (code === 1003) return { ok: true, claimed: false, message: '本期已领取过（1003）' };
+  if (code === 1005) {
+    return { ok: false, message: `本期名额已用完（1005，结束于 ${fmtUnix(claimed.json.ends_at)}）` };
+  }
+  return {
+    ok: false,
+    message: `领取失败：HTTP ${claimed.status} ${(claimed.json && (claimed.json.msg || claimed.json.message)) || claimed.text.slice(0, 120)}`,
+  };
+}
+
+/** Loomy 没有命令行登录接口：只能拉起桌面端，等它把 session 写进 auth-session.json。 */
+function loomyExe() {
+  const candidates = [
+    process.env.LOOMY_EXE,
+    'D:\\Loomy\\Loomy.exe',
+    path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Loomy', 'Loomy.exe'),
+    path.join(process.env['LOCALAPPDATA'] || '', 'Programs', 'Loomy', 'Loomy.exe'),
+  ].filter(Boolean);
+  for (const file of candidates) {
+    try {
+      if (fs.statSync(file).isFile()) return file;
+    } catch {}
+  }
+  return null;
+}
+
+async function loginLoomy(p, { force = false } = {}) {
+  const before = readLoomySession();
+  if (before && !force) {
+    ok(`${p.title} ${loomyAuth().label}`);
+    return true;
+  }
+  const exe = loomyExe();
+  if (exe) {
+    try {
+      const child = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false });
+      child.on('error', () => {});
+      child.unref();
+      say(dim(`  已打开 ${path.basename(exe)}，请在窗口里完成登录（最多等 2 分钟）`));
+    } catch (e) {
+      warn(`  打不开 Loomy：${e.message}`);
+    }
+  } else {
+    warn('  找不到 Loomy.exe；请手动打开 Loomy 桌面端并登录');
+  }
+  say(dim(`  登录态文件：${loomyAuthFile()}`));
+  for (let i = 0; i < 60; i += 1) {
+    const now = readLoomySession();
+    // --force 时只有 token 或 updatedAt 真的变了才算重新登录成功，否则会立刻把旧
+    // 登录态当成新结果返回。
+    const changed = now && (!before || now.token !== before.token || now.updatedAt !== before.updatedAt);
+    if (changed) {
+      ok(`${p.title} 已登录（${loomyAuth().label.replace(/^已登录（|）$/g, '')}）`);
+      return true;
+    }
+    await sleep(2000);
+  }
+  bad(`${p.title} 仍未读到登录态（${loomyAuthFile()}）`);
+  return false;
+}
+
+/** 小浣熊同样没有命令行登录接口：只能拉起桌面端，等它把 token 写进 auth.json。 */
+function raccoonExe() {
+  const candidates = [
+    process.env.RACCOON_EXE,
+    path.join('D:', 'ShangTang', '@raccoonoffice-desktop', '商汤小浣熊.exe'),
+    path.join(process.env['ProgramFiles'] || 'C:\\Program Files', '商汤小浣熊', '商汤小浣熊.exe'),
+    path.join(process.env['LOCALAPPDATA'] || '', 'Programs', 'raccoonoffice-desktop', '商汤小浣熊.exe'),
+  ].filter(Boolean);
+  for (const file of candidates) {
+    try {
+      if (fs.statSync(file).isFile()) return file;
+    } catch {}
+  }
+  return null;
+}
+
+async function loginRaccoon(p, { force = false } = {}) {
+  const before = readRaccoonSession();
+  if (before && !force) {
+    ok(`${p.title} ${raccoonAuth().label}`);
+    return true;
+  }
+  const exe = raccoonExe();
+  if (exe) {
+    try {
+      const child = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false });
+      child.on('error', () => {});
+      child.unref();
+      say(dim(`  已打开 ${path.basename(exe)}，请在窗口里完成登录（最多等 2 分钟）`));
+    } catch (e) {
+      warn(`  打不开小浣熊：${e.message}`);
+    }
+  } else {
+    warn('  找不到「商汤小浣熊.exe」；请手动打开桌面端并登录');
+  }
+  say(dim(`  登录态文件：${raccoonAuthFile()}`));
+  for (let i = 0; i < 60; i += 1) {
+    const now = readRaccoonSession();
+    // --force 时只有 token 或文件 mtime 真的变了才算重新登录成功。
+    const changed = now && (!before || now.token !== before.token || now.updatedAt !== before.updatedAt);
+    if (changed) {
+      ok(`${p.title} 已登录（${raccoonAuth().label.replace(/^已登录（|）$/g, '')}）`);
+      return true;
+    }
+    await sleep(2000);
+  }
+  bad(`${p.title} 仍未读到登录态（${raccoonAuthFile()}）`);
+  return false;
+}
+
+/** 百度搭子同样没有命令行登录接口：拉起桌面端，等它把账号写进 auth.json。 */
+function dumateExe() {
+  const candidates = [
+    process.env.DUMATE_EXE,
+    'D:\\DuMate\\DuMate.exe',
+    path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'DuMate', 'DuMate.exe'),
+    path.join(process.env['LOCALAPPDATA'] || '', 'Programs', 'DuMate', 'DuMate.exe'),
+  ].filter(Boolean);
+  for (const file of candidates) {
+    try {
+      if (fs.statSync(file).isFile()) return file;
+    } catch {}
+  }
+  return null;
+}
+
+async function loginDumate(p, { force = false } = {}) {
+  const before = readDumateProfile();
+  if (before && !force) {
+    ok(`${p.title} ${dumateAuth().label}`);
+    return true;
+  }
+  const exe = dumateExe();
+  if (exe) {
+    try {
+      const child = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false });
+      child.on('error', () => {});
+      child.unref();
+      say(dim(`  已打开 ${path.basename(exe)}，请在窗口里完成登录（最多等 2 分钟）`));
+    } catch (e) {
+      warn(`  打不开百度搭子：${e.message}`);
+    }
+  } else {
+    warn('  找不到 DuMate.exe；请手动打开百度搭子桌面端并登录');
+  }
+  say(dim(`  登录态文件：${path.join(dumateAppData(), 'auth.json')}`));
+  for (let i = 0; i < 60; i += 1) {
+    const now = readDumateProfile();
+    // --force 时只有账号或最近登录时间真的变了才算重新登录成功。
+    const changed = now && (!before || now.accountId !== before.accountId || now.lastLogin !== before.lastLogin);
+    if (changed) {
+      ok(`${p.title} 已登录（${dumateAuth().label.replace(/^已登录（|）$/g, '')}）`);
+      return true;
+    }
+    await sleep(2000);
+  }
+  bad(`${p.title} 仍未读到登录态（${path.join(dumateAppData(), 'auth.json')}）`);
+  return false;
+}
+
+/**
+ * 千问办公：同样没有命令行登录。它多一步——登录后必须在桌面端**发出过请求**，
+ * 才会在 `engine-maas-key.dat` 里签发推理凭据；只登录不发请求时代理拿不到 key。
+ */
+function qwenworkExe() {
+  const candidates = [
+    process.env.QWENWORK_EXE,
+    'D:\\QwenWork\\QwenWorkCN\\2.1.0-26111315\\QwenWorkCN.exe',
+    path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'QwenWork', 'QwenWorkCN.exe'),
+    path.join(process.env['LOCALAPPDATA'] || '', 'Programs', 'QwenWork', 'QwenWorkCN.exe'),
+    '/opt/apps/QwenWorkCN/qwen-work-cn',
+    '/usr/bin/qwen-work-cn',
+    '/usr/local/bin/qwen-work-cn',
+  ].filter(Boolean);
+  for (const file of candidates) {
+    try {
+      if (fs.statSync(file).isFile()) return file;
+    } catch {}
+  }
+  return null;
+}
+
+async function loginQwenwork(p, { force = false } = {}) {
+  const before = qwenworkCredential();
+  const expired = Boolean(before && before.expiresAtMs && before.expiresAtMs <= Date.now());
+  // 过期不能当「已登录」跳过：exchange 需要用有效凭据才能换新，key 死了就换不了，
+  // 只能回到桌面端重新签发。以前这里只看「文件在不在」，于是 login 一直说无需登录。
+  if (before && !expired && !force && !before.pending) {
+    ok(`${p.title} ${qwenworkAuth().label}`);
+    return true;
+  }
+  if (expired) {
+    warn(`  ${p.title} 的推理凭据已过期（${new Date(before.expiresAtMs).toISOString()}），过期后无法 exchange 自续`);
+  }
+  const exe = qwenworkExe();
+  if (exe) {
+    try {
+      const child = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false });
+      child.on('error', () => {});
+      child.unref();
+      say(dim(`  已打开 ${path.basename(exe)}，请在窗口里登录**并随便发一句话**（最多等 2 分钟）`));
+    } catch (e) {
+      warn(`  打不开千问办公：${e.message}`);
+    }
+  } else {
+    warn('  找不到 QwenWorkCN.exe；请手动打开千问办公并登录');
+  }
+  const keyTarget = process.platform === 'win32' ? qwenworkKeyFile() : qwenworkCredentials.cacheFile();
+  say(dim(`  推理凭据：${keyTarget}`));
+  for (let i = 0; i < 60; i += 1) {
+    // Linux/macOS：桌面端登录后 auth-v2.dat 一更新，这里就能直接签出 key。
+    try {
+      await qwenworkCredentials.ensureAccessKey({ force: true });
+    } catch {}
+    const now = qwenworkCredential();
+    const changed =
+      now &&
+      !now.pending &&
+      (!before || now.expiresAtMs !== before.expiresAtMs || now.sessionId !== before.sessionId);
+    if (changed) {
+      ok(`${p.title} 已登录（${qwenworkAuth().label.replace(/^已登录（|）$/g, '')}）`);
+      return true;
+    }
+    await sleep(2000);
+  }
+  bad(`${p.title} 仍未读到推理凭据（${keyTarget}）`);
+  say(dim('  提示：请确认桌面端已登录；反代会从 auth-v2.dat 自动签发 key'));
+  return false;
+}
+
 async function loginProvider(p, { force = false } = {}) {
   const before = authStatus(p);
-  if (before.ok && !force) {
+  // 千问办公是例外：凭据过期意味着「只能人工重新签发」，不能当已登录跳过。
+  const needsHuman = p.kind === 'qwenwork' && before.state === 'expired';
+  if (before.ok && !force && !needsHuman) {
     ok(`${p.title} ${before.label}`);
     return { ok: true, skipped: true, wasUp: false };
   }
@@ -1204,6 +4061,11 @@ async function loginProvider(p, { force = false } = {}) {
   else if (p.kind === 'workbuddy') success = await loginWorkbuddy(p);
   else if (p.kind === 'trae') success = await loginTrae(p);
   else if (p.kind === 'codearts') success = await loginCodearts(p);
+  else if (p.kind === 'zcode') success = await loginZcode(p);
+  else if (p.kind === 'loomy') success = await loginLoomy(p, { force });
+  else if (p.kind === 'raccoon') success = await loginRaccoon(p, { force });
+  else if (p.kind === 'qwenwork') success = await loginQwenwork(p, { force });
+  else if (p.kind === 'dumate') success = await loginDumate(p, { force });
   else bad(`不知道怎么登录 ${p.title}`);
 
   // Trae/CodeArts 的登录必须先把网关跑起来；如果它本来没在跑，登录后恢复「停止」。
@@ -1702,7 +4564,7 @@ async function addProviderFromModels(p) {
     return { ok: true, wrote: false };
   }
 
-  const listed = await fetchModelsRetry(p.port, keyFor(p.id));
+  const listed = await fetchModelsRetry(p.port, keyFor(p.id), 3, p.modelsPath || '/models');
   if (!listed || listed.length === 0) {
     return { ok: false, reason: `拿不到模型列表（:${p.port}）` };
   }
@@ -1724,6 +4586,67 @@ async function addProviderFromModels(p) {
 }
 
 /**
+ * 只刷新已存在的 provider 的模型清单（provider 本身、baseURL、apiKey 都不动）。
+ *
+ * `doSyncOpenCode` 只在 provider 不存在时才写入，所以上游加/删模型后它什么都不做——
+ * 这就是 ZCode 的 opencode 里长期只有 1 个模型、Qoder 国内版还留着上游已停用模型的
+ * 原因。这里补上另一半：拿实时目录覆盖 models，其它键保持原样。
+ */
+async function refreshProviderModels(p) {
+  if (p.gateway) {
+    // 网关的模型清单是十家的并集，由 `router gateway install` 写；
+    // 它不是反代，没有自己的 /v1/models 目录可刷新
+    return { ok: true, skipped: true, reason: '网关的模型清单由 gateway install 写入' };
+  }
+
+  const files = locateProviderFiles(p.ocProvider);
+  if (!files.length) return { ok: false, reason: 'opencode 里还没这个 provider，先跑 up' };
+  if (files.some((f) => f.endsWith('opencode.jsonc'))) {
+    // 用户自己维护的配置（带注释），router 无权改——不算失败，只是跳过
+    return { ok: true, skipped: true, reason: 'provider 在你自己的 opencode.jsonc 里，router 不改它' };
+  }
+
+  if (p.ocAdd) {
+    // WorkBuddy 的模型表只能来自 pi 扩展（反代的 /v1/models 是包作者猜的静态表）
+    const r = runTool(p.ocAdd[0], p.ocAdd.slice(1));
+    if (!r.ok) return { ok: false, reason: (r.out || r.reason || '').split('\n').slice(-1)[0] };
+    return { ok: true, wrote: true, models: ocModelCount(p.ocProvider) };
+  }
+
+  const listed = await fetchModelsRetry(p.port, keyFor(p.id), 3, p.modelsPath || '/models');
+  if (!listed || listed.length === 0) return { ok: false, reason: `拿不到模型列表（:${p.port}）` };
+  const models = p.ocSkip ? listed.filter((m) => !p.ocSkip(m.id || m.slug)) : listed;
+  const mod = requireShared('opencode-config.js');
+  if (!mod) return { ok: false, reason: '找不到 opencode-config.js' };
+
+  const before = ocModelCount(p.ocProvider);
+  mod.mergeProviders([
+    {
+      id: p.ocProvider,
+      name: p.ocName || p.title,
+      baseURL: `http://127.0.0.1:${p.port}/v1`,
+      apiKey: p.ocApiKey || keyFor(p.id) || 'local-proxy',
+      models: mod.toOpencodeModels(models),
+    },
+  ]);
+  return { ok: true, wrote: before !== models.length, models: models.length, before };
+}
+
+/** `router models [id...]`：把各家上游的最新模型目录写回 opencode。 */
+async function doRefreshModels(ids) {
+  const list = ids && ids.length ? PROVIDERS.filter((p) => ids.includes(p.id)) : PROVIDERS;
+  const rows = [];
+  for (const p of list) {
+    if (!(await probePort(p.port)).up) {
+      rows.push({ p, ok: false, reason: '未运行' });
+      continue;
+    }
+    rows.push({ p, ...(await refreshProviderModels(p)) });
+  }
+  return rows;
+}
+
+/**
  * 让 opencode 的 provider 列表与选择一致。
  *
  * 这一步容易被忽略：进程停了但 opencode.json 里还留着 provider，模型选择器里就会
@@ -1732,6 +4655,9 @@ async function addProviderFromModels(p) {
 async function doSyncOpenCode(enabled, { startIds = null } = {}) {
   let changed = 0;
   for (const p of PROVIDERS) {
+    // 网关是叠加层：它自己的 provider 由 `router gateway install` 显式写入，
+    // 不跟着开关自动增删——否则 `on gateway` 会顺手把十家的 provider 全删掉。
+    if (p.gateway) continue;
     const want = enabled.includes(p.id);
     const present = ocHasProvider(p.ocProvider);
     if (want === present) continue;
@@ -1801,7 +4727,9 @@ async function cmdList({ json = false } = {}) {
         id: p.id,
         title: p.title,
         port: p.port,
-        on: enabled.includes(p.id),
+        // 网关是叠加层，没有独立的「开/关」：它的 on 直接反映进程状态。
+        // 这样 TUI 的 drift 判定（on != up）不会把它误报成「已停用但仍在运行」。
+        on: p.gateway ? probe.up : enabled.includes(p.id),
         up: probe.up,
         models,
         pid: pids[0] || (recorded[0] && recorded[0].pid) || null,
@@ -1816,7 +4744,18 @@ async function cmdList({ json = false } = {}) {
   );
 
   if (json) {
-    console.log(JSON.stringify({ enabled, providers: rows }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          generatedAt: new Date().toISOString(),
+          enabled,
+          providers: rows,
+        },
+        null,
+        2,
+      ),
+    );
     return 0;
   }
 
@@ -1826,15 +4765,22 @@ async function cmdList({ json = false } = {}) {
     `  ${padEnd('供应商', 20)} ${padEnd('开关', 6)} ${padEnd('进程', 18)} ${padEnd('管理', 10)} ${padEnd('opencode', 10)} 端口`,
   );
   for (const r of rows) {
-    const on = r.on ? `${C.ok}开${C.reset}` : `${C.dim}关${C.reset}`;
+    const p = PROVIDERS.find((x) => x.id === r.id);
+    // 网关是叠加层，不属于「开/关」这套语义：它的开关列显示成「叠加」，
+    // 否则每次 `up gateway` 之后 list 都会报一条假的 drift。
+    const on = p?.gateway ? `${C.dim}叠加${C.reset}` : r.on ? `${C.ok}开${C.reset}` : `${C.dim}关${C.reset}`;
     const pid = r.pid ? ` ${dim(r.pid)}` : '';
     const up = r.up ? `${C.ok}运行中${C.reset}${pid}` : `${C.dim}已停${C.reset}`;
     const control = r.control === 'tool' ? '计划任务' : 'router';
-    const oc = r.ocUserOwned
-      ? `${C.dim}用户自管${C.reset}`
-      : r.oc
+    const oc = p?.gateway
+      ? r.oc
         ? `${C.ok}已写入${C.reset}`
-        : `${C.dim}未写入${C.reset}`;
+        : `${C.dim}未安装${C.reset}`
+      : r.ocUserOwned
+        ? `${C.dim}用户自管${C.reset}`
+        : r.oc
+          ? `${C.ok}已写入${C.reset}`
+          : `${C.dim}未写入${C.reset}`;
     const models = r.models === null ? '' : dim(` ${r.models} 模型`);
     say(
       `  ${padEnd(r.title, 20)} ${padEnd(on, 6)} ${padEnd(up, 18)} ${padEnd(control, 10)} ${padEnd(oc, 10)} :${r.port}${models}`,
@@ -1842,11 +4788,15 @@ async function cmdList({ json = false } = {}) {
   }
   say('─'.repeat(92));
 
-  const onCount = rows.filter((r) => r.on).length;
+  const realRows = rows.filter((r) => !PROVIDERS.find((x) => x.id === r.id)?.gateway);
+  const onCount = realRows.filter((r) => r.on).length;
   const upCount = rows.filter((r) => r.up).length;
-  say(`  ${onCount}/${rows.length} 开启　·　${upCount} 个进程在跑`);
+  const gwUp = rows.some((r) => r.id === 'gateway' && r.up);
+  say(
+    `  ${onCount}/${realRows.length} 开启　·　${upCount} 个进程在跑${gwUp ? `　·　${C.ok}网关在 :${GATEWAY_PORT}${C.reset}` : ''}`,
+  );
 
-  const drift = rows.filter((r) => r.on !== r.up);
+  const drift = rows.filter((r) => r.on !== r.up && !PROVIDERS.find((x) => x.id === r.id)?.gateway);
   if (drift.length) {
     say('');
     warn(`开关与进程不一致：${drift.map((r) => r.title).join('、')}`);
@@ -1856,7 +4806,9 @@ async function cmdList({ json = false } = {}) {
   }
 
   // 用户自己在 .jsonc 里配的不算漂移——我们无权改，也不该一直提示
-  const ocDrift = rows.filter((r) => r.on !== r.oc && !r.ocUserOwned);
+  const ocDrift = rows.filter(
+    (r) => r.on !== r.oc && !r.ocUserOwned && !PROVIDERS.find((x) => x.id === r.id)?.gateway,
+  );
   if (ocDrift.length) {
     warn(`开关与 opencode 配置不一致：${ocDrift.map((r) => r.title).join('、')}`);
     say(`  ${dim('执行 node router.mjs sync 同步')}`);
@@ -1866,6 +4818,28 @@ async function cmdList({ json = false } = {}) {
   if (unauth.length) {
     warn(`未登录：${unauth.map((r) => `${r.title}（${r.auth.label}）`).join('、')}`);
     say(`  ${dim(`登录：node router.mjs login ${unauth.map((r) => r.id).join(' ')}`)}`);
+  }
+
+  // 账号级别的故障：登录态整体正常，但池子里有个别账号需要重登/换号。
+  // 这类问题不会让 list 的「进程/登录」亮红灯，却会让请求随机失败，必须单独提示。
+  const accountAlerts = rows
+    .map((r) => {
+      const p = PROVIDERS.find((x) => x.id === r.id);
+      const bad = accountIssues(p, accountsFor(p));
+      return bad.length ? { r, bad } : null;
+    })
+    .filter(Boolean);
+  if (accountAlerts.length) {
+    const total = accountAlerts.reduce((n, a) => n + a.bad.length, 0);
+    warn(`账号异常 ${total} 个：${accountAlerts.map((a) => `${a.r.title} ${a.bad.length}`).join('、')}`);
+    for (const { r, bad } of accountAlerts) {
+      for (const a of bad) {
+        const tag = a.health.level === 'error' ? C.bad : C.warn;
+        say(`  ${tag} ${padEnd(r.title, 18)} ${padEnd(a.name, 18)} ${dim(a.health.notes.join('；'))}`);
+      }
+      say(`  ${dim(`  修：${accountFixHint(PROVIDERS.find((x) => x.id === r.id), bad[0])}`)}`);
+    }
+    say(`  ${dim('只看账号问题：node router.mjs account check')}`);
   }
   return 0;
 }
@@ -1900,6 +4874,250 @@ async function cmdLogin(rawArgs) {
   }
   ok('登录检查完成');
   return 0;
+}
+
+// ---------------------------------------------------------------- 本机限额
+//
+// 为什么 router 要有这个命令：限额是「防止上游判定套流」的那条线，必须能一眼
+// 看到**实际生效值**（含硬约束封顶），而不是让人去读源码里那几张表。
+//
+//   node router.mjs limits                 看全部
+//   node router.mjs limits raccoon         看一家
+//   node router.mjs limits raccoon safe    改档位（写 limits.json）
+//   node router.mjs limits raccoon rpm 6   改单项
+//   node router.mjs limits --check         体检：有没有被硬约束压掉的配置
+
+function loadLimiterModule() {
+  return require(path.join(HERE, 'integrations', 'limits', 'limiter.js'));
+}
+
+/**
+ * 把限额推给自带限流器的反代。
+ *
+ * 只有 CodeArts 需要：它的 Go 网关有独立的 `rate_limit_*` 设置，默认值
+ * （5 QPS / 突发 10 / 并发 8）远高于上游「每账号 3 个并发会话」的硬约束。
+ * 其它反代（tw2api / zcode-bridge / WorkBuddy）没有可在线修改的限流参数，
+ * 只能靠 router 与网关这一层挡住。
+ */
+async function applyLimitsToProviders(mod, cfg) {
+  const rows = mod.describeLimits(['codearts'], { cfg });
+  const row = rows[0];
+  if (!row) {
+    bad('没有可下发的供应商');
+    return 1;
+  }
+  const port = PROVIDERS.find((p) => p.id === 'codearts')?.port || 10087;
+  const up = await probePort(port, 1200);
+  if (!up.up) {
+    warn(`CodeArts 没在 :${port} 上跑，跳过（先 node router.mjs up codearts）`);
+    return 1;
+  }
+  // 把 rpm 换算成 QPS：向上取整到 1，避免 40rpm 变成 0.67 被服务端当 0 忽略
+  const qps = Math.max(1, Math.round(row.rpm / 60));
+  const body = {
+    rate_limit_enabled: true,
+    rate_limit_qps: qps,
+    rate_limit_burst: Math.max(1, row.burst),
+    rate_limit_concurrency: row.concurrency,
+  };
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/admin/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      bad(`下发失败：HTTP ${res.status}（CodeArts 可能设了管理密码）`);
+      return 1;
+    }
+    const data = await res.json().catch(() => null);
+    ok(
+      `已下发到 CodeArts：QPS ${data?.rate_limit_qps ?? qps}、突发 ${data?.rate_limit_burst ?? body.rate_limit_burst}、并发 ${data?.rate_limit_concurrency ?? row.concurrency}`,
+    );
+    say(dim('  注意：CodeArts 的限流是「每密钥」，router 侧还有一层「每进程」'));
+    return 0;
+  } catch (e) {
+    bad(`下发失败：${e.message}`);
+    return 1;
+  }
+}
+
+async function cmdLimits(raw, { json = false } = {}) {
+  const mod = loadLimiterModule();
+  const args = raw.filter((a) => !a.startsWith('--'));
+  const checkOnly = raw.includes('--check');
+  const apply = raw.includes('--apply');
+  const cfg = mod.loadLimits();
+
+  // --apply：把限额推给「自己有独立限流器」的反代（目前只有 CodeArts）。
+  // 为什么需要：CodeArts2API 内部默认 5 QPS / 突发 10 / 并发 8，而它上游的硬约束
+  // 是「每账号 3 个并发会话」。不改它，router 侧的限额只管网关，客户端直连
+  // :10087 时仍然会打满 8 路。
+  if (apply) {
+    return applyLimitsToProviders(mod, cfg);
+  }
+
+  if (args.length >= 2) {
+    // limits <id> <tier|字段> [值]
+    const [idRaw, keyRaw, valueRaw] = args;
+    const resolved = resolveId(idRaw);
+    if (resolved.error) {
+      bad(resolved.error);
+      say(`  可选：${PROVIDERS.map((p) => p.id).join('、')}`);
+      return 1;
+    }
+    const id = resolved.p.id;
+    const key = keyRaw.toLowerCase();
+    const file = cfg.file;
+    const doc = readJsonFile(file) || {};
+    doc.providers = doc.providers && typeof doc.providers === 'object' ? doc.providers : {};
+    doc.providers[id] = doc.providers[id] && typeof doc.providers[id] === 'object' ? doc.providers[id] : {};
+
+    if (key === 'tier') {
+      const tier = String(valueRaw || '').toLowerCase();
+      if (!mod.PRESETS[tier]) {
+        bad(`未知档位：${valueRaw}（可选：${Object.keys(mod.PRESETS).join('、')}）`);
+        return 1;
+      }
+      doc.providers[id].tier = tier;
+    } else if (['concurrency', 'rpm', 'minIntervalMs', 'burst', 'dailyCap'].includes(key)) {
+      const n = Number(valueRaw);
+      if (!Number.isFinite(n) || n < 0) {
+        bad(`数值无效：${valueRaw}`);
+        return 1;
+      }
+      doc.providers[id][key] = Math.trunc(n);
+    } else if (key === 'reset') {
+      delete doc.providers[id];
+    } else {
+      bad(`未知字段：${keyRaw}（tier / concurrency / rpm / minIntervalMs / burst / dailyCap / reset）`);
+      return 1;
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);
+    ok(`已写入 ${path.basename(file)}：${id} ${key}${valueRaw ? ` ${valueRaw}` : ''}`);
+    // 立刻显示生效值（含封顶）
+    return cmdLimits([id], { json });
+  }
+
+  const ids = args.length
+    ? resolveIds(args).ids
+    : PROVIDERS.filter((p) => !p.gateway).map((p) => p.id);
+  const rows = mod.describeLimits(ids, { cfg });
+
+  if (json) {
+    console.log(
+      JSON.stringify({ schemaVersion: 1, generatedAt: new Date().toISOString(), tier: cfg.tier, file: cfg.file, providers: rows }, null, 2),
+    );
+    return 0;
+  }
+
+  say(`${C.bold}本机限额${C.reset}  ${dim(`${cfg.file} · 全局档 ${cfg.tier}`)}`);
+  say('─'.repeat(92));
+  say(
+    `  ${padEnd('供应商', 16)} ${padEnd('档位', 10)} ${padEnd('并发', 6)} ${padEnd('每分钟', 8)} ${padEnd('最小间隔', 10)} ${padEnd('每日', 6)} 说明`,
+  );
+  for (const row of rows) {
+    const p = PROVIDERS.find((x) => x.id === row.id);
+    const cap = mod.HARD_CAPS[row.id];
+    const capped = cap && Object.entries(cap).some(([k, v]) => row[k] === v && v < (mod.PRESETS[row.tier] || {})[k]);
+    const note = capped ? `${C.warn}受硬约束封顶${C.reset}` : '';
+    say(
+      `  ${padEnd(p ? p.title : row.id, 16)} ${padEnd(row.tier, 10)} ${padEnd(String(row.concurrency), 6)} ${padEnd(String(row.rpm), 8)} ${padEnd(`${row.minIntervalMs}ms`, 10)} ${padEnd(row.dailyCap ? String(row.dailyCap) : '—', 6)} ${note}`,
+    );
+  }
+  say('─'.repeat(92));
+  const free = mod.loadLimits().free;
+  say(
+    dim(
+      `  免费供应商（云端 key）：并发 ${free.concurrency}、${free.rpm}/分钟、间隔 ${free.minIntervalMs}ms${free.dailyCap ? `、每日 ${free.dailyCap}` : ''}`,
+    ),
+  );
+  say('');
+  say(dim('  改档位：node router.mjs limits raccoon safe     改单项：node router.mjs limits raccoon rpm 6'));
+  say(dim('  这些限额是「一个人正常用」的量级，不是上游硬上限；硬约束见 integrations/limits/limiter.js'));
+
+  if (checkOnly) {
+    const problems = [];
+    for (const row of rows) {
+      const cap = mod.HARD_CAPS[row.id];
+      if (cap && cap.concurrency && row.concurrency > cap.concurrency) {
+        problems.push(`${row.id} 并发 ${row.concurrency} 超过硬约束 ${cap.concurrency}`);
+      }
+      if (row.rpm > 600) problems.push(`${row.id} 每分钟 ${row.rpm} 次，接近「机器刷量」的形态`);
+      if (row.minIntervalMs === 0 && row.burst > 4) {
+        problems.push(`${row.id} 无最小间隔且突发 ${row.burst}，容易被判并发异常`);
+      }
+    }
+    say('');
+    if (problems.length) {
+      for (const msg of problems) warn(msg);
+      return 1;
+    }
+    ok('限额配置没有明显问题');
+  }
+  return 0;
+}
+
+async function cmdClaim(raw, { json = false } = {}) {
+  const dryRun = raw.includes('--dry-run');
+  const planIdx = raw.indexOf('--plan');
+  const only = planIdx >= 0 && planIdx + 1 < raw.length ? raw[planIdx + 1] : null;
+  const ids = raw.filter(
+    (a, i) =>
+      !a.startsWith('--') &&
+      !(planIdx >= 0 && i === planIdx + 1),
+  );
+  const resolved = ids.length ? resolveIds(ids) : { ids: ['zcode'] };
+  if (resolved.error) {
+    bad(resolved.error);
+    say(`  可选：${PROVIDERS.map((p) => p.id).join('、')}`);
+    return 1;
+  }
+  const targets = PROVIDERS.filter((p) => resolved.ids.includes(p.id));
+  if (!targets.length) {
+    bad('没有可领取的供应商');
+    return 1;
+  }
+
+  let badCount = 0;
+  const results = [];
+  // --json 时把人类可读输出静音，只留最后那一段 JSON
+  if (json) MUTE_OUTPUT = true;
+  try {
+    for (const p of targets) {
+    if (p.kind !== 'zcode') {
+      results.push({ id: p.id, skipped: '这家没有可领取的套餐' });
+      if (!json) say(dim(`${p.title}：没有可领取的套餐，跳过`));
+      continue;
+    }
+    if (!json) say(`${C.bold}${p.title}${C.reset}${dryRun ? '  (dry-run)' : ''}`);
+    const r = await claimZcode({ dryRun, only }).catch((e) => ({ error: e.message }));
+    results.push({ id: p.id, ...r });
+    if (r.error) {
+      badCount += 1;
+      if (!json) {
+        bad(`${p.title}：${r.error}`);
+        if (r.hint) say(dim(`  ${r.hint}`));
+      }
+    } else if (r.claimed) {
+      if (!json) ok(r.message);
+    } else if (r.ok) {
+      if (!json) say(`${r.message.includes('已生效') ? C.dim : C.ok} ${r.message}`);
+    } else {
+      if (!json) warn(r.message);
+    }
+    }
+  } finally {
+    MUTE_OUTPUT = false;
+  }
+
+  if (json) {
+    console.log(JSON.stringify({ ok: badCount === 0, action: 'claim', results }, null, 2));
+    return badCount ? 1 : 0;
+  }
+  return badCount ? 1 : 0;
 }
 
 function cmdLogs(args) {
@@ -1963,6 +5181,55 @@ function taskExists(task) {
 async function cmdService(args) {
   const action = (args[0] || 'status').toLowerCase();
   const rest = args.slice(1);
+
+  // service claim install|uninstall|status —— ZCode 限时套餐的定时领取
+  // 必须在 resolveIds 之前处理：它的子命令不是供应商 id。
+  if (action === 'claim' || action === 'checkin') {
+    const sub = (rest[0] || 'status').toLowerCase();
+    const task = 'router-zcode-claim';
+    if (sub === 'status') {
+      const exists = taskExists(task);
+      say(`${C.bold}ZCode 定时领取${C.reset}`);
+      say(`  任务名  ${task}`);
+      say(
+        `  状态    ${exists === null ? dim('非 Windows') : exists ? `${C.ok}已注册${C.reset}` : `${C.dim}未注册${C.reset}`}`,
+      );
+      if (exists) say(dim('  每 2 小时跑一次 claim zcode；已领过的活动会被上游回 1003，不会重复消耗'));
+      say(dim('  安装：node router.mjs service claim install    移除：service claim uninstall'));
+      return 0;
+    }
+    if (!WIN) {
+      warn('定时任务目前只支持 Windows 计划任务');
+      return 1;
+    }
+    if (sub === 'uninstall') {
+      runSchtasks(['/Delete', '/TN', task, '/F']);
+      ok(`已移除 ${task}`);
+      return 0;
+    }
+    fs.mkdirSync(RUN_DIR, { recursive: true });
+    const wrapper = path.join(RUN_DIR, 'zcode-claim.cmd');
+    const logFile = path.join(RUN_DIR, 'zcode-claim.log');
+    fs.writeFileSync(
+      wrapper,
+      [
+        '@echo off',
+        'rem 由 router.mjs service claim install 生成。',
+        `"${process.execPath}" "${path.join(HERE, 'router.mjs')}" claim zcode >> "${logFile}" 2>&1`,
+        '',
+      ].join('\r\n'),
+    );
+    const tr = wrapper.includes(' ') ? `"${wrapper}"` : wrapper;
+    const c = runSchtasks(['/Create', '/TN', task, '/TR', tr, '/SC', 'HOURLY', '/MO', '2', '/RL', 'LIMITED', '/F']);
+    if (c.status !== 0) {
+      bad(`注册失败：${(c.stderr || c.stdout || '').trim().split('\n').slice(-1)[0]}`);
+      return 1;
+    }
+    ok(`已注册 ${task}（每 2 小时领取一次）`);
+    say(dim(`  日志：${logFile}`));
+    return 0;
+  }
+
   const resolved = rest.length ? resolveIds(rest) : { ids: PROVIDERS.map((p) => p.id) };
   if (resolved.error) {
     bad(resolved.error);
@@ -2077,6 +5344,173 @@ async function cmdService(args) {
   return 1;
 }
 
+// ---------------------------------------------------------------- 统一网关
+
+/**
+ * `router providers ...`：免费供应商（云端 API-Key + 本机免账号）的运维入口。
+ *
+ * 这些供应商没有进程可管，所以不进 PROVIDERS（那张表是「spawn 什么」）。
+ * 它们由网关直接当作上游，配置落在 gateway/data/providers.json。
+ */
+async function cmdProviders(raw) {
+  const { main } = await import(new URL('./gateway/cli.mjs', import.meta.url).href);
+  return main(['providers', ...raw]);
+}
+
+/**
+ * `router gateway ...`：统一网关的运维入口。
+ *
+ * 这里刻意不重复实现密钥/用量逻辑，全部转发到 `gateway/cli.mjs`（同一个进程内 import），
+ * router 只负责它擅长的那部分：启停、探活、交叉校验端口、把 provider 写进 opencode。
+ *
+ * 为什么要有交叉校验：网关自己的 `gateway/providers.mjs` 里有一份端口表，
+ * router 的 PROVIDERS 里也有一份。两边一旦漂移，症状是「请求打到旧端口 → 502」，
+ * 极难查。`gateway doctor` 会把两份表逐条比。
+ */
+async function cmdGateway(raw) {
+  const args = raw.filter((a) => !a.startsWith('--'));
+  const sub = (args[0] || 'status').toLowerCase();
+  const json = raw.includes('--json');
+  const gw = PROVIDERS.find((p) => p.gateway);
+
+  const loadCli = () => import(new URL('./gateway/cli.mjs', import.meta.url).href);
+  const loadProviders = () => import(new URL('./gateway/providers.mjs', import.meta.url).href);
+
+  if (sub === 'install') {
+    // 把网关写成 opencode 的一个 provider：模型名带 `<provider>/` 前缀，
+    // 于是客户端只改 baseURL 就能跨供应商选模型。
+    // 包含本机 9 家**与**已配置的免费供应商（云端 + 本机免账号）。
+    const { modelsOfAny, allUpstreamIds } = await loadProviders();
+    const ids = await allUpstreamIds();
+    const rows = await Promise.all(ids.map(async (id) => ({ id, models: await modelsOfAny(id, { force: true }) })));
+    const entries = [];
+    for (const row of rows) {
+      for (const m of row.models) {
+        entries.push({
+          id: `${row.id}/${m.id}`,
+          name: `${row.id}/${m.name || m.id}`,
+          context: m.context,
+          vision: m.vision,
+          reasoning: m.reasoning,
+        });
+      }
+    }
+    if (!entries.length) {
+      bad('一家供应商都没在跑，先 node router.mjs up');
+      return 1;
+    }
+    const mod = requireShared('opencode-config.js');
+    if (!mod) {
+      bad('找不到 opencode-config.js');
+      return 1;
+    }
+    const r = mod.mergeProviders([
+      {
+        id: gw.ocProvider,
+        name: gw.ocName,
+        baseURL: `http://127.0.0.1:${GATEWAY_PORT}/v1`,
+        apiKey: gw.ocApiKey,
+        models: mod.toOpencodeModels(entries.map((e) => ({ id: e.id, name: e.name }))),
+      },
+    ]);
+    ok(`已写入 opencode：${gw.ocProvider}（${entries.length} 个模型）`);
+    if (r.backup) say(dim(`  备份：${r.backup}`));
+
+    // pi 侧同一个 provider：一个 baseURL + `<供应商>/<模型>`，外加 combo 虚拟模型。
+    // 与 `node scripts/pi-models.mjs gateway` 同一份实现（scripts/lib/pi-sync.mjs）。
+    const pisync = await import(new URL('./scripts/lib/pi-sync.mjs', import.meta.url).href);
+    const piProvider = await pisync.gatewayPiProvider({ entries, combos: await pisync.gatewayCombos() });
+    const pi = pisync.mergePiProviders([piProvider]);
+    if (pi.added.length) {
+      ok(`已写入 pi：${gw.ocProvider}（${piProvider.models.length} 个模型）`);
+      if (pi.backup) say(dim(`  备份：${pi.backup}`));
+    } else {
+      say(dim(`pi 里 ${gw.ocProvider} 已是最新（${piProvider.models.length} 个模型）`));
+    }
+
+    say(dim(`  baseURL http://127.0.0.1:${GATEWAY_PORT}/v1　模型形如 trae-local/<model> 或 openrouter/<model>`));
+    say(dim(`  免费供应商另有独立 provider：node router.mjs providers install`));
+    say(dim(`  不想留着：node router.mjs gateway uninstall`));
+    return 0;
+  }
+
+  if (sub === 'uninstall') {
+    const rem = removeProviderDirect(gw.ocProvider);
+    if (rem.removed) ok(`已从 opencode 移除 ${gw.ocProvider}`);
+    else if (rem.onlyInJsonc) warn(`${gw.ocProvider} 在你自己的 opencode.jsonc 里，router 不改它`);
+    else say(dim('opencode 里本来就没有这个 provider'));
+    const pisync = await import(new URL('./scripts/lib/pi-sync.mjs', import.meta.url).href);
+    const pis = pisync.removePiProviders([gw.ocProvider]);
+    if (pis.removed.length) {
+      ok(`已从 pi 移除 ${gw.ocProvider}`);
+      if (pis.backup) say(dim(`  备份：${pis.backup}`));
+    } else {
+      say(dim(`pi 里本来就没有 ${gw.ocProvider}`));
+    }
+    return 0;
+  }
+
+  if (sub === 'up' || sub === 'start') {
+    const failed = await doUp([gw], { quiet: false });
+    if (!failed) {
+      const probe = await waitPort(GATEWAY_PORT, 15000);
+      if (probe.up) ok(`网关已就绪：http://127.0.0.1:${GATEWAY_PORT}`);
+    }
+    return failed ? 1 : 0;
+  }
+
+  if (sub === 'down' || sub === 'stop') {
+    const r = await doDown([gw], { quiet: false });
+    return r ? 0 : 1;
+  }
+
+  if (sub === 'restart') {
+    await doDown([gw], { quiet: true });
+    const failed = await doUp([gw], { quiet: false });
+    return failed ? 1 : 0;
+  }
+
+  if (sub === 'doctor') {
+    // 先跑网关自己的自检，再补一条 router 侧的端口交叉校验
+    const cli = await loadCli();
+    const code = await cli.main(['doctor']);
+    const { DESCRIPTORS } = await loadProviders();
+    say('');
+    say(`${C.bold}端口交叉校验${C.reset}${dim('（router PROVIDERS ↔ gateway DESCRIPTORS）')}`);
+    let drift = 0;
+    for (const d of DESCRIPTORS) {
+      const p = PROVIDERS.find((x) => x.id === d.id);
+      if (!p) {
+        warn(`${d.id} 只在网关表里，router 没有这家`);
+        drift += 1;
+        continue;
+      }
+      if (p.port !== d.port) {
+        bad(`${d.id} 端口不一致：router ${p.port} ↔ gateway ${d.port}`);
+        drift += 1;
+      }
+    }
+    for (const p of PROVIDERS) {
+      if (p.gateway) continue;
+      if (!DESCRIPTORS.some((d) => d.id === p.id)) {
+        warn(`${p.id} 在 router 里有、网关表里没有（网关不会转发到它）`);
+        drift += 1;
+      }
+    }
+    if (!drift) ok(`${DESCRIPTORS.length} 家端口一致`);
+    return code || drift ? 1 : 0;
+  }
+
+  if (sub === 'refresh-quota') {
+    const cli = await loadCli();
+    return cli.main(['refresh-quota']);
+  }
+
+  // 其余子命令原样交给 gateway/cli.mjs
+  const cli = await loadCli();
+  return cli.main([sub, ...raw.slice(raw.indexOf(sub) + 1)]);
+}
+
 // ---------------------------------------------------------------- 自检
 
 async function cmdDoctor() {
@@ -2092,6 +5526,19 @@ async function cmdDoctor() {
       bad(`状态文件不是合法 JSON：${STATE_FILE}`);
       issues += 1;
     }
+  }
+
+  // 本机限额：读不到 limits.json 不算故障（有内置默认档），但要说明当前生效值，
+  // 否则「以为在限流其实没生效」是最难查的一类问题。
+  let limitsById = new Map();
+  try {
+    const mod = loadLimiterModule();
+    const cfg = mod.loadLimits();
+    limitsById = new Map(mod.describeLimits(PROVIDERS.map((p) => p.id), { cfg }).map((r) => [r.id, r]));
+    if (fs.existsSync(cfg.file)) say(`  ${C.ok} 本机限额 ${cfg.file}（全局档 ${cfg.tier}）`);
+    else say(`  ${C.warn} 没有 limits.json，用内置默认档（全局 ${cfg.tier}）`);
+  } catch (e) {
+    say(`  ${C.warn} 限流模块不可用：${e.message}`);
   }
 
   for (const p of PROVIDERS) {
@@ -2119,6 +5566,38 @@ async function cmdDoctor() {
     }
     const probe = await probePort(p.port);
     checks.push(probe.up ? `${C.ok} :${p.port} 在线` : `${C.dim} :${p.port} 未开`);
+    if (p.kind === 'loomy') {
+      checks.push(readLoomySession() ? `${C.ok} 已登录` : `${C.warn} 未登录（${loomyAuthFile()}）`);
+    }
+    if (p.kind === 'raccoon') {
+      checks.push(readRaccoonSession() ? `${C.ok} 已登录` : `${C.warn} 未登录（${raccoonAuthFile()}）`);
+    }
+    if (p.kind === 'qwenwork') {
+      const cred = qwenworkCredential();
+      checks.push(
+        cred && cred.pending
+          ? `${C.ok} 已登录（推理凭据由反代自动签发）`
+          : cred
+            ? `${C.ok} 已登录（凭据 ${cred.alive}/${cred.count} 有效）`
+            : `${C.warn} 未登录（打开千问办公桌面端登录）`,
+      );
+    }
+    if (p.kind === 'dumate') {
+      const profile = readDumateProfile();
+      checks.push(
+        profile
+          ? `${C.ok} 已登录（${profile.name || shortUser(profile.accountId)}）`
+          : `${C.warn} 未登录（打开百度搭子桌面端登录）`,
+      );
+    }
+    // 本机限额：这一家的并发/速率闸门，避免「以为在限流其实没生效」
+    // 网关是叠加层（不直连上游），限额对它的「免费供应商」分支才有意义
+    const limRow = p.gateway ? null : limitsById.get(p.id);
+    if (limRow) {
+      checks.push(
+        `${C.dim}限流 ${limRow.tier} ${limRow.concurrency}路/${limRow.rpm}rpm${C.reset}`,
+      );
+    }
     say(`  ${padEnd(p.title, 20)} ${checks.join('  ')}`);
   }
 
@@ -2145,7 +5624,17 @@ function usage() {
 
 用法：
   node router.mjs list [--json]          看各家状态（开关 / 进程 / 管理方式 / opencode / 端口）
-  node router.mjs up [id...] [--login]   按当前开关启动；缺凭证时打开浏览器登录
+  node router.mjs account [id] [账号]     查看 / 切换账号（WorkBuddy、CodeArts、Trae、ZCode）
+  node router.mjs account add <id>        浏览器登录并往账号池里添加一个账号
+  node router.mjs account remove <id> <账号>  从账号池删除账号（先归档，可 restore）
+  node router.mjs account restore <id>    恢复被删账号（从 retired-* 归档捡回）
+  node router.mjs account check [id...]   只看有问题的账号：需重登 / 快过期 / 积分为 0
+  node router.mjs account merge codearts  合并同一账号的重复记录（按套餐用量指纹识别）
+  node router.mjs claim [id...]           领取限时套餐（ZCode 周末/夜间 Token 包）
+  node router.mjs service claim install   注册定时领取（Windows 计划任务，每 2 小时）
+  node router.mjs account <id> --all      恢复该家的账号池为全部启用
+  node router.mjs account <id> <账号> --dry-run   只预览切换结果，不写文件不重启
+  node router.mjs up [id...] [--all] [--login]   按当前开关启动；--all 先全开再启动
   node router.mjs start [id...]          up 的别名
   node router.mjs login [id...] [--force]   浏览器登录；默认只处理当前开启的
   node router.mjs down [id...] [--keep-oc]  停止；不带 id 时停全部；--keep-oc 保留 provider
@@ -2157,15 +5646,43 @@ function usage() {
   node router.mjs all / none             全开 / 全关
   node router.mjs reload                 down + up（改完开关后重放）
   node router.mjs sync                   只同步 opencode 配置
+  node router.mjs models [id...]         按上游 /v1/models 刷新 opencode 的模型清单
+  node router.mjs gateway up              启动统一网关（单端口 + 双协议 + 跨供应商转移）
+  node router.mjs gateway status          网关调度快照：权重、冷却、并发、粘性
+  node router.mjs gateway install         把网关写成 opencode + pi 的一个 provider
+  node router.mjs gateway key add --name dev --providers trae-local,zcode
+  node router.mjs gateway usage [--days 7]   用量聚合（网关没跑也能读本地记录）
+  node router.mjs gateway balance         各家额度汇总
+  node router.mjs gateway doctor          网关自检 + 端口交叉校验
+  node router.mjs gateway refresh-quota   采集额度写快照（影响调度权重）
+  node router.mjs providers list          看 18 家免费供应商（3 家本机 + 15 家有免费额度）
+  node router.mjs providers key <id> <key>   配置某家的 API key（加密落盘）
+  node router.mjs providers test [id...]  探活：拉一次模型列表验证 key
+  node router.mjs providers install       把可用的写成 opencode + pi provider
+  node router.mjs limits                 看本机限额（并发/速率/每日上限）
+  node router.mjs limits raccoon safe    改档位（写 limits.json）
+  node router.mjs limits raccoon rpm 6   改单项
+  node router.mjs limits --check         体检限额配置
+  node router.mjs limits --apply         把限额下发给自带限流器的反代（CodeArts）
   node router.mjs service [status]       看登录自启状态
   node router.mjs service install [id...]    注册登录自启（Windows 计划任务）
   node router.mjs service uninstall [id...]  停止并移除登录自启
+  node router.mjs sync-homes [--status]  双系统账号/配置同步（每次 router 运行也会自动跑）
   node router.mjs doctor                 自检（命令、文件、端口、opencode）
 
 供应商 id：
 ${PROVIDERS.map((p) => `  ${p.id.padEnd(20)} ${p.title}${p.control === 'spawn' ? dim(' （router 直接托管）') : ''}`).join('\n')}
 
 例：
+  node router.mjs account                        列出所有账号与当前生效
+  node router.mjs account check                  只列出需要处理的账号
+  node router.mjs account add workbuddy          浏览器登录，往 WorkBuddy 账号池加一个账号
+  node router.mjs account remove workbuddy c     删除 WorkBuddy 的 slot c（先归档）
+  node router.mjs account restore workbuddy      把刚删掉的账号捡回来
+  node router.mjs account workbuddy              只看 WorkBuddy 国内版账号
+  node router.mjs account workbuddy b            切到 WorkBuddy slot b
+  node router.mjs account codearts GT-demo    只启用 CodeArts 的 GT-demo
+  node router.mjs account trae-local --all       恢复 Trae 全部账号参与调度
   node router.mjs on qoder-cn                    只开 Qoder 国内版
   node router.mjs login qoder                    打开浏览器登录 Qoder 国际版
   node router.mjs up trae-local codearts          只启动 Trae 和 CodeArts，不改开关
@@ -2173,24 +5690,76 @@ ${PROVIDERS.map((p) => `  ${p.id.padEnd(20)} ${p.title}${p.control === 'spawn' ?
   node router.mjs restart workbuddy-global        重启 WorkBuddy 国际版
   node router.mjs none                            全部关掉（省内存）
   node router.mjs service install trae-local      让 Trae 登录时自动启动
+  node router.mjs gateway up                       启动统一网关（:${GATEWAY_PORT}）
+  node router.mjs gateway key add --name dev --providers trae-local
+  node router.mjs gateway install                  让 opencode 与 pi 用 router-gateway/<供应商>/<模型>
+  node router.mjs providers list                   免费供应商：3 家本机 + 15 家有免费额度
+  node router.mjs providers key openrouter sk-or-...   配 key（加密落盘，不写进 config.json）
+  node router.mjs providers install                把可用的写成独立 opencode + pi provider
 
 状态文件：${STATE_FILE}
-运行记录：${PROCESS_FILE}`);
+运行记录：${PROCESS_FILE}
+网关数据：${path.join(GATEWAY_DIR, 'data')}（密钥只存 SHA-256，用量按天分片）`);
 }
 
 // ---------------------------------------------------------------- 入口
+
+/** 显式记录 WorkBuddy 当前账号，供共享库同步使用。 */
+async function markActiveWorkbuddy(region, uid) {
+  try {
+    const { setActiveWorkbuddy } = await import(new URL('./scripts/sync-homes.mjs', import.meta.url).href);
+    setActiveWorkbuddy(region, uid);
+  } catch {}
+}
+
+/** 双系统共享账号/配置。失败只记一条提示，绝不影响 router 主流程。 */
+let syncHomesFn = null;
+let autoSyncDisabled = false;
+async function autoSyncHomes() {
+  if (autoSyncDisabled) return;
+  try {
+    if (!syncHomesFn) {
+      ({ syncHomes: syncHomesFn } = await import(new URL('./scripts/sync-homes.mjs', import.meta.url).href));
+    }
+    await syncHomesFn({ quiet: true });
+  } catch {}
+}
 
 async function main() {
   const argv = process.argv.slice(2);
   const cmd = (argv[0] || 'list').toLowerCase();
   const raw = argv.slice(1);
+
+  // --status 只看不写；其它命令在启动前先把两套系统的账号与配置对齐。
+  if (cmd === 'sync-homes' && raw.includes('--status')) autoSyncDisabled = true;
+  await autoSyncHomes();
   const quiet = raw.includes('--quiet');
   const json = raw.includes('--json');
   const keepOc = raw.includes('--keep-oc');
+  // `up --all` 是常见写法；以前 --all 会被当成未知 flag 丢掉，开关为空时
+  // 看起来像「什么都没发生」。这里让它等价于 `all`：先全开再启动。
+  const allFlag = raw.includes('--all');
   const args = raw.filter((a) => !a.startsWith('--'));
   // 交互式终端里，启动时发现缺凭证就打开浏览器；计划任务/管道里只提示，避免卡住。
   const autoLogin =
     !raw.includes('--no-login') && (raw.includes('--login') || (process.stdin.isTTY && process.stdout.isTTY));
+
+  if (cmd === 'sync-homes' || cmd === 'homes') {
+    const { syncHomes, printStatus } = await import(new URL('./scripts/sync-homes.mjs', import.meta.url).href);
+    if (raw.includes('--status')) {
+      autoSyncDisabled = true;
+      printStatus();
+      return 0;
+    }
+    const hi = raw.indexOf('--homes');
+    const homes = hi >= 0 && raw[hi + 1] ? raw[hi + 1].split(';').map((s) => s.trim()).filter(Boolean) : null;
+    const result = await syncHomes({ homes, quiet: false });
+    if (result.skipped) {
+      say(result.reason);
+      say(dim(`示例：node router.mjs sync-homes --homes "C:\\Users\\Administrator;D:\\Users\\demo"`));
+    }
+    return 0;
+  }
 
   // on/off/all/none 都要先改开关，再决定要不要立刻生效
   if (cmd === 'on' || cmd === 'off') {
@@ -2230,16 +5799,23 @@ async function main() {
     return 0;
   }
 
-  if (cmd === 'all' || cmd === 'none') {
-    const saved = writeState(cmd === 'all' ? PROVIDERS.map((p) => p.id) : []);
-    ok(cmd === 'all' ? '已全部开启' : '已全部关闭');
-    if (cmd === 'all') {
+  const upAll = (cmd === 'up' || cmd === 'start') && allFlag;
+  if (cmd === 'all' || cmd === 'none' || upAll) {
+    if (upAll && args.length) {
+      bad('--all 不能同时指定供应商');
+      say(dim(`  要么 node router.mjs up --all，要么 node router.mjs up ${args.join(' ')}`));
+      return 1;
+    }
+    const turningOn = cmd !== 'none';
+    const saved = writeState(turningOn ? PROVIDERS.map((p) => p.id) : []);
+    ok(turningOn ? '已全部开启' : '已全部关闭');
+    if (turningOn) {
       await doUp(PROVIDERS);
       await ensureLogins(PROVIDERS, { auto: autoLogin });
     } else {
       await doDown(PROVIDERS);
     }
-    await doSyncOpenCode(saved, { startIds: cmd === 'all' ? saved : [] });
+    await doSyncOpenCode(saved, { startIds: turningOn ? saved : [] });
     say('');
     await cmdList();
     return 0;
@@ -2322,6 +5898,36 @@ async function main() {
     return 0;
   }
 
+  if (cmd === 'models' || cmd === 'refresh-models') {
+    const resolved = args.length ? resolveIds(args) : { ids: currentEnabled() };
+    if (resolved.error) {
+      bad(resolved.error);
+      return 1;
+    }
+    say(`${C.bold}刷新模型${C.reset}  从各家 /v1/models 拉最新目录写回 opencode`);
+    const rows = await doRefreshModels(resolved.ids);
+    for (const r of rows) {
+      if (!r.ok) {
+        warn(`${r.p.title} 跳过：${r.reason}`);
+        continue;
+      }
+      if (r.skipped) {
+        say(`${C.dim}· ${r.p.title} ${r.reason}${C.reset}`);
+        continue;
+      }
+      const detail = r.before === undefined || r.before === null ? '' : r.before === r.models ? `（未变，${r.models} 个）` : `（${r.before} → ${r.models} 个）`;
+      ok(`${r.p.title} ${r.models} 个模型${detail}`);
+    }
+    const failed = rows.filter((r) => !r.ok).length;
+    if (failed) say(dim(`\n${failed} 家没刷新；其余已写入，原配置已备份`));
+    return failed ? 1 : 0;
+  }
+
+  if (cmd === 'account' || cmd === 'accounts' || cmd === 'acct') return cmdAccount(raw, { json });
+  if (cmd === 'gateway' || cmd === 'gw') return cmdGateway(raw);
+  if (cmd === 'providers' || cmd === 'provider') return cmdProviders(raw);
+  if (cmd === 'claim' || cmd === 'checkin') return cmdClaim(raw, { json });
+  if (cmd === 'limits' || cmd === 'limit') return cmdLimits(raw, { json });
   if (cmd === 'login') return cmdLogin(raw);
   if (cmd === 'logs') return cmdLogs(args);
   if (cmd === 'service') return cmdService(args);
@@ -2347,9 +5953,14 @@ async function main() {
 }
 
 main()
-  .then((code) => process.exit(code || 0))
-  .catch((e) => {
+  .then(async (code) => {
+    // 命令可能刚改了登录态/账号/opencode 配置，退出前再对齐一次。
+    await autoSyncHomes();
+    process.exit(code || 0);
+  })
+  .catch(async (e) => {
     console.error(e);
+    await autoSyncHomes();
     process.exit(1);
   });
 

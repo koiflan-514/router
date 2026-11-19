@@ -4,7 +4,13 @@
 *.log
 *.jsonl
 *.pid
+*.tmp-*
 
+# 双系统共享账号库（含凭证，绝不入库）
+/.shared-home/
+
+# 统一网关的密钥库、用量与配置（密钥只存 SHA-256，但仍是机密）
+/gateway/data/
 # 凭证与账号状态（本机保留，不入库）
 .env
 .env.*
@@ -22,9 +28,18 @@
 /integrations/traework2api/tw2api
 /integrations/codearts2api/codearts2api.exe
 /integrations/codearts2api/codearts2api
+# 源码压缩包与 integrations/codearts2api/ 重复，且是 9.7MB 二进制，不入库
+/integrations/codearts2api.zip
+/integrations/zcode-bridge/zcode-bridge.exe
+/integrations/zcode-bridge/zcode-bridge
+/integrations/zcode-bridge/*.exe~
+/integrations/zcode-bridge/data/
+/integrations/zcode-bridge/retired-*/
+/integrations/zcode-bridge/plan-jwt.json
 
 # 依赖与缓存
 node_modules/
+/tui/target/
 __pycache__/
 *.pyc
 .venv/

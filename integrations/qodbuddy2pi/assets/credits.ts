@@ -185,7 +185,7 @@ const creditsTool = defineTool({
   name: "credits",
   label: "Credits",
   description:
-    "Query the user's remaining credits/quotas and daily check-in status for Qoder, Trae and WorkBuddy. " +
+    "Query the user's remaining credits/quotas and daily check-in status for Qoder, Trae, WorkBuddy, CodeArts, ZCode, Loomy, Raccoon, QwenWork and DuMate. " +
     "Reads only local state (pi credentials and locally running proxies); never modifies login files. " +
     "Use it when the user asks how many credits they have left or whether today's check-in is done.",
   parameters: Type.Object({
@@ -199,7 +199,7 @@ const creditsTool = defineTool({
     provider: Type.Optional(
       Type.Unsafe<string>({
         type: "string",
-        description: "Limit to one source: qoder-cn, qoder, trae, workbuddy, workbuddy-global.",
+        description: "Limit to one source: qoder-cn, qoder, trae, workbuddy, workbuddy-global, codearts, zcode, loomy, raccoon, qwenwork, dumate.",
       }),
     ),
   }),
@@ -235,7 +235,10 @@ export default function creditsExtension(pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
       const wantCheckin = arg === "checkin" || arg === "签到";
-      const only = ["qoder-cn", "qoder", "trae", "workbuddy", "workbuddy-global"].includes(arg) ? [arg] : null;
+      const only = [
+        "qoder-cn", "qoder", "trae", "workbuddy", "workbuddy-global",
+        "codearts", "zcode", "loomy", "raccoon", "qwenwork", "dumate",
+      ].includes(arg) ? [arg] : null;
 
       const rows = await quota.collectAll({ only });
       const text = quota.renderText(rows);

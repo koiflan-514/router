@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-12T03:00:00.000Z",
+  "ok": true,
+  "data": {
+    "range": { "from": 1762308000000, "to": 1762912800000 },
+    "sessions": 12,
+    "subagents": 3,
+    "prompts": 48,
+    "steps": 320,
+    "tokens": {
+      "input": 411200,
+      "output": 98200,
+      "reasoning": 5400,
+      "cache": { "read": 12000, "write": 3000 }
+    },
+    "cost": 1.8421,
+    "tools": { "totals": { "calls": 210, "succeeded": 200, "failed": 10 } },
+    "activeDays": 6,
+    "streak": 2,
+    "activity": [
+      { "date": "2026-11-11", "steps": 80 },
+      { "date": "2026-11-10", "steps": 64 }
+    ],
+    "models": [
+      {
+        "id": "glm-5.3-flash",
+        "providerID": "trae-local",
+        "steps": 120,
+        "tokens": { "input": 150000, "output": 40000 },
+        "cost": 0.7
+      },
+      { "id": "glm-5.3", "providerID": "zcode", "steps": 60, "cost": 0.4 }
+    ]
+  }
+}

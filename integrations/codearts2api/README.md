@@ -173,7 +173,7 @@ POST /v1/ops/invite/generate         {campaignId} 生成专属邀请码与邀请
 ### 2.3 可用模型（积分通道）
 
 需要订阅 / 企业套餐，按上游返回的 `credit[].ratio_display` 倍率扣积分。
-以下是 2026-10 实测的完整清单（`/v1/models` 与之一致）：
+以下是 2026-11 实测的完整清单（`/v1/models` 与之一致）：
 
 | model_id | 名称 | 类别 | 积分倍率 |
 | --- | --- | --- | --- |
@@ -183,10 +183,10 @@ POST /v1/ops/invite/generate         {campaignId} 生成专属邀请码与邀请
 | `openpangu-2.0-pro` | OpenPangu-2.0-Pro | 文本生成 | 0.7x |
 | `openpangu-2.0-flash` | OpenPangu-2.0-Flash | 文本生成 | 0.32x |
 | `deepseek-v4.1-flash` | DeepSeek-V4.1-Flash | 文本生成 | 0.18x |
-| `Qwen3-VL-235B` | Qwen3-VL-235B | 图片理解 | — |
-| `kimi-k2.6-vl` | Kimi-K2.6-VL | 图片理解 | — |
 
-> 图片理解类模型上游没有公布计费档，`credit` 字段为空（控制台显示「—」）。
+> `Qwen3-VL-235B` 与 `kimi-k2.6-vl` 已于 2026-11 下线：调用返回 404
+> 「模型 X 不存在」，上游清单里也不再列出。反代的兜底表已同步删除，
+> 否则清单拉取失败时会把它们重新写回客户端。
 > 上游也不返回上下文长度，因此 `context` / `max_output` 都是 0。
 
 > ⚠️ **所有模型都会真实扣费。** 控制台的「允许真实消耗积分」开关关闭后，

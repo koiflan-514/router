@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-12T03:00:00.000Z",
+  "ok": true,
+  "data": {
+    "ok": false,
+    "issues": 1,
+    "probeRequested": false,
+    "text": "qoder-cn  127.0.0.1:8789  11 models  凭证剩 29 天\n",
+    "providers": [
+      {
+        "id": "qoder-cn",
+        "title": "Qoder 国内版",
+        "url": "http://127.0.0.1:8789/v1",
+        "reachable": true,
+        "httpStatus": 200,
+        "models": 11,
+        "auth": { "state": "expiring", "expiresAt": "2026-11-14T00:00:00.000Z" },
+        "probe": null,
+        "error": null
+      },
+      {
+        "id": "codearts",
+        "title": "CodeArts Agent",
+        "url": "http://127.0.0.1:10087/v1",
+        "reachable": false,
+        "httpStatus": 0,
+        "models": null,
+        "auth": { "state": "unknown", "expiresAt": null },
+        "probe": null,
+        "error": "connect failed"
+      }
+    ]
+  }
+}

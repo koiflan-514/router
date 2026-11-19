@@ -527,6 +527,366 @@ async function codeartsClaim() {
   };
 }
 
+// ---------------------------------------------------------------- ZCode
+
+/**
+ * ZCode（Z.ai / bigmodel 的编程套餐）在本机反代 zcode-bridge 里：
+ *   GET /v1/quota  → 套餐 + 每条 entitlement 的 total/used/remaining
+ * 上游按 **token** 计量，量级是几亿，所以统一换算成百万 token（M tok），
+ * 既好读也不会把 TUI 的窄列撑歪。
+ */
+const ZCODE = {
+  provider: 'zcode',
+  title: 'ZCode（Z.ai）',
+  port: 20131,
+};
+
+const ZCODE_M = 1_000_000;
+
+async function zcodeCredits() {
+  const base = `http://127.0.0.1:${ZCODE.port}`;
+  const quota = await getJson(`${base}/v1/quota`);
+  if (quota.status === 0) {
+    return {
+      provider: ZCODE.provider,
+      title: ZCODE.title,
+      available: false,
+      kind: 'zcode',
+      reason: `本机 ZCode 反代未运行（127.0.0.1:${ZCODE.port}）`,
+    };
+  }
+
+  const rows = quota.json && Array.isArray(quota.json.rows) ? quota.json.rows : [];
+  if (!quota.ok || rows.length === 0) {
+    const err =
+      quota.json && Array.isArray(quota.json.errors) && quota.json.errors.length > 0
+        ? quota.json.errors[0]
+        : null;
+    return {
+      provider: ZCODE.provider,
+      title: ZCODE.title,
+      available: false,
+      kind: 'zcode',
+      reason:
+        quota.status === 401
+          ? '凭据已失效（重新登录 ZCode 即可）'
+          : err
+            ? `没有可用套餐（${err}）`
+            : `额度接口返回 ${quota.status || quota.error || '错误'}`,
+    };
+  }
+
+  const buckets = rows.map((r) => {
+    const round2 = (v) => Math.round(v * 100) / 100;
+    const total = Number(r.total_units || 0) / ZCODE_M;
+    const used = Number(r.used_units || 0) / ZCODE_M;
+    const remaining = Number(r.available_units ?? r.remaining_units ?? 0) / ZCODE_M;
+    const plan = r.plan_name || r.plan || '套餐';
+    const model = r.model || (Array.isArray(r.models) && r.models[0]) || '模型';
+    return {
+      id: String(r.entitlement_id || `${plan}:${model}`),
+      // TUI 的分账列窄，标签用模型名；套餐名放在 row.plan 里
+      label: model,
+      total: round2(total),
+      used: round2(used),
+      remaining: round2(Math.max(0, remaining)),
+      unit: 'M tok',
+      expiresAt: r.ends_at || r.expires_at || null,
+    };
+  });
+
+  const plans = [...new Set(rows.map((r) => r.plan_name || r.plan).filter(Boolean))];
+
+  return {
+    provider: ZCODE.provider,
+    title: ZCODE.title,
+    available: true,
+    kind: 'zcode',
+    baseUrl: base,
+    fetchedAt: quota.json && quota.json.server_time ? new Date(quota.json.server_time * 1000).toISOString() : undefined,
+    account: quota.json && quota.json.account ? String(quota.json.account) : undefined,
+    plan: plans.length > 0 ? plans.join('、') : undefined,
+    buckets,
+    // 限时套餐由 router 的 claim 定时任务负责；这里不占「签到」状态位，
+    // 免得 TUI 的状态列显示成一句说明
+  };
+}
+
+// ---------------------------------------------------------------- Loomy（讯飞）
+
+/**
+ * Loomy 的余额与倍率都在本仓库自写的反代 loomy-proxy 里（:8791）：
+ *   GET /v1/quota → wallet { balance, daily, available } + multipliers
+ * 上游只给“当前可用额”，没有总额；这里 total 留空，显示端只报余量。
+ */
+const LOOMY = {
+  provider: 'loomy',
+  title: 'Loomy（讯飞 iModel）',
+  port: 8791,
+};
+
+async function loomyCredits() {
+  const base = `http://127.0.0.1:${LOOMY.port}`;
+  const quota = await getJson(`${base}/v1/quota`);
+  if (quota.status === 0) {
+    return {
+      provider: LOOMY.provider,
+      title: LOOMY.title,
+      available: false,
+      kind: 'loomy',
+      reason: `本机 Loomy 反代未运行（127.0.0.1:${LOOMY.port}）`,
+    };
+  }
+
+  const q = quota.json || {};
+  if (!quota.ok || q.ok !== true) {
+    const message = (q.error && q.error.message) || `额度接口返回 ${quota.status || quota.error || '错误'}`;
+    return {
+      provider: LOOMY.provider,
+      title: LOOMY.title,
+      available: false,
+      kind: 'loomy',
+      reason: quota.status === 401 ? 'Loomy 登录态失效（打开 Loomy 桌面端重新登录）' : message,
+    };
+  }
+
+  const wallet = q.wallet || {};
+  const available = Number(wallet.available ?? (q.balance && q.balance.remaining) ?? 0);
+  const balance = Number(wallet.balance || 0);
+  const daily = Number(wallet.daily || 0);
+  const multipliers = q.multipliers && typeof q.multipliers === 'object' ? q.multipliers : null;
+  const multiplierCount = multipliers ? Object.keys(multipliers).length : 0;
+
+  return {
+    provider: LOOMY.provider,
+    title: LOOMY.title,
+    available: true,
+    kind: 'loomy',
+    baseUrl: base,
+    fetchedAt: q.fetchedAt,
+    account: q.user && (q.user.phone || q.user.id) ? String(q.user.phone || q.user.id) : undefined,
+    // 没有总额：total 留空，TUI 显示 “—”，不显示假的 20000/20000
+    buckets: [{ label: '可用积分', remaining: available, unit: 'credits' }],
+    detail: [
+      `常驻 ${fmtNum(balance)} · 每日 ${fmtNum(daily)}`,
+      multiplierCount > 0 ? `${multiplierCount} 个模型有倍率` : '上游没有逐模型倍率',
+    ],
+    multipliers,
+  };
+}
+
+// ---------------------------------------------------------------- 小浣熊（商汤）
+
+/**
+ * 商汤小浣熊的余额与倍率都在本仓库自写的反代 raccoon-proxy 里（:8793）：
+ *   GET /v1/quota → wallet { available, daily, monthly, reward, topup } + multipliers
+ * 上游只给“当前可用额”，没有总额；这里 total 留空，显示端只报余量。
+ */
+const RACCOON = {
+  provider: 'raccoon',
+  title: '商汤小浣熊',
+  port: 8793,
+};
+
+async function raccoonCredits() {
+  const base = `http://127.0.0.1:${RACCOON.port}`;
+  const quota = await getJson(`${base}/v1/quota`);
+  if (quota.status === 0) {
+    return {
+      provider: RACCOON.provider,
+      title: RACCOON.title,
+      available: false,
+      kind: 'raccoon',
+      reason: `本机小浣熊反代未运行（127.0.0.1:${RACCOON.port}）`,
+    };
+  }
+
+  const q = quota.json || {};
+  if (!quota.ok || q.ok !== true) {
+    const message = (q.error && q.error.message) || `额度接口返回 ${quota.status || quota.error || '错误'}`;
+    return {
+      provider: RACCOON.provider,
+      title: RACCOON.title,
+      available: false,
+      kind: 'raccoon',
+      reason: quota.status === 401 ? '小浣熊登录态失效（打开桌面端重新登录）' : message,
+    };
+  }
+
+  const wallet = q.wallet || {};
+  const available = Number(wallet.available ?? (q.balance && q.balance.remaining) ?? 0);
+  const daily = Number(wallet.daily || 0);
+  const reward = Number(wallet.reward || 0);
+  const multipliers = q.multipliers && typeof q.multipliers === 'object' ? q.multipliers : null;
+  const multiplierCount = multipliers ? Object.keys(multipliers).length : 0;
+  const user = q.user || {};
+
+  return {
+    provider: RACCOON.provider,
+    title: RACCOON.title,
+    available: true,
+    kind: 'raccoon',
+    baseUrl: base,
+    fetchedAt: q.fetchedAt,
+    account: user.identity ? String(user.identity) : undefined,
+    // 没有总额：total 留空，TUI 显示 “—”，不显示假的 20000/20000
+    buckets: [{ label: '可用积分', remaining: available, unit: 'credits' }],
+    detail: [
+      `每日 ${fmtNum(daily)} · 赠送 ${fmtNum(reward)}`,
+      multiplierCount > 0 ? `${multiplierCount} 个模型有倍率` : '上游没有逐模型倍率',
+    ],
+    multipliers,
+  };
+}
+
+// ---------------------------------------------------------------- 千问办公（QwenWork）
+
+/**
+ * 千问办公的倍率在反代 qwenwork-proxy 里（:8794）：
+ *   GET /v1/quota → multipliers（逐模式 price_factor）+ user（昵称/套餐）
+ *
+ * 与别家的差别：**没有可读的余额**。桌面端的 wallets 接口要宿主登录 JWT，
+ * 而那个 JWT 加密绑定本机身份，反代刻意不解。所以这里只报倍率与账号，
+ * 余额留空——显示端据此只显示「—」，不编数字。
+ */
+const QWENWORK = {
+  provider: 'qwenwork',
+  title: '千问办公（QwenWork）',
+  port: 8794,
+};
+
+async function qwenworkCredits() {
+  const base = `http://127.0.0.1:${QWENWORK.port}`;
+  const quota = await getJson(`${base}/v1/quota`);
+  if (quota.status === 0) {
+    return {
+      provider: QWENWORK.provider,
+      title: QWENWORK.title,
+      available: false,
+      kind: 'qwenwork',
+      reason: `本机千问办公反代未运行（127.0.0.1:${QWENWORK.port}）`,
+    };
+  }
+
+  const q = quota.json || {};
+  const multipliers = q.multipliers && typeof q.multipliers === 'object' ? q.multipliers : null;
+  const multiplierCount = multipliers ? Object.keys(multipliers).length : 0;
+  const user = q.user || {};
+
+  // 反代在「凭据不可用」时仍返回倍率，同时把原因放 error
+  if (!quota.ok || q.ok !== true) {
+    return {
+      provider: QWENWORK.provider,
+      title: QWENWORK.title,
+      available: false,
+      kind: 'qwenwork',
+      reason: (q.error && q.error.message) || `额度接口返回 ${quota.status || quota.error || '错误'}`,
+      multipliers,
+      detail: [user.plan ? `套餐 ${user.plan}` : ''].filter(Boolean),
+    };
+  }
+
+  const detail = [];
+  if (user.plan) detail.push(`套餐 ${user.plan}`);
+  if (multiplierCount > 0) detail.push(`${multiplierCount} 个模型有倍率`);
+  if (q.quotaNote) detail.push(String(q.quotaNote));
+
+  return {
+    provider: QWENWORK.provider,
+    title: QWENWORK.title,
+    available: true,
+    kind: 'qwenwork',
+    baseUrl: base,
+    fetchedAt: q.fetchedAt,
+    account: user.name || user.username || undefined,
+    // 没有余额读数：buckets 留空，显示端只显示「—」
+    buckets: [],
+    detail,
+    multipliers,
+  };
+}
+
+// ---------------------------------------------------------------- 百度搭子（DuMate）
+
+/**
+ * 百度搭子的余额与模型都在本仓库自写的反代 dumate-proxy 里（:8795）：
+ *   GET /v1/quota → wallet { total, used, available } + user + subscriptions
+ *
+ * 上游（桌面端 main-server 代理的 console 接口）给的是「总额 - 已用」，
+ * 与 Loomy/小浣熊不同，这里能画真实进度条。积分在桌面端签到/购买。
+ */
+const DUMATE = {
+  provider: 'dumate',
+  title: '百度搭子（DuMate）',
+  port: 8795,
+};
+
+async function dumateCredits() {
+  const base = `http://127.0.0.1:${DUMATE.port}`;
+  const quota = await getJson(`${base}/v1/quota`);
+  if (quota.status === 0) {
+    return {
+      provider: DUMATE.provider,
+      title: DUMATE.title,
+      available: false,
+      kind: 'dumate',
+      reason: `本机百度搭子反代未运行（127.0.0.1:${DUMATE.port}）`,
+    };
+  }
+
+  const q = quota.json || {};
+  if (!quota.ok || q.ok !== true) {
+    const message = (q.error && q.error.message) || `额度接口返回 ${quota.status || quota.error || '错误'}`;
+    return {
+      provider: DUMATE.provider,
+      title: DUMATE.title,
+      available: false,
+      kind: 'dumate',
+      reason: message,
+    };
+  }
+
+  const wallet = q.wallet || {};
+  const balance = q.balance || {};
+  const available = Number(wallet.available ?? balance.remaining ?? 0);
+  const total = Number(wallet.total ?? balance.total ?? 0);
+  const used = Number(wallet.used ?? balance.used ?? 0);
+  const user = q.user || {};
+  const subs = Array.isArray(q.subscriptions) ? q.subscriptions : [];
+  const expiring = subs
+    .filter((s) => s.status === 'active' && s.expireAt)
+    .map((s) => new Date(s.expireAt).getTime())
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b)[0];
+
+  const detail = [];
+  if (user.subscribed) detail.push('已订阅');
+  if (user.throttled) detail.push('上游限流中');
+  if (subs.length > 1) detail.push(`${subs.length} 个积分包`);
+
+  return {
+    provider: DUMATE.provider,
+    title: DUMATE.title,
+    available: true,
+    kind: 'dumate',
+    baseUrl: base,
+    fetchedAt: q.fetchedAt,
+    account: user.name || user.accountId || undefined,
+    buckets: [
+      {
+        label: '可用积分',
+        total,
+        used,
+        remaining: available,
+        unit: 'credits',
+        ...(expiring ? { expiresAt: expiring } : {}),
+      },
+    ],
+    detail,
+    multipliers: q.multipliers && typeof q.multipliers === 'object' ? q.multipliers : null,
+  };
+}
+
 // ---------------------------------------------------------------- 汇总
 
 /**
@@ -546,6 +906,11 @@ async function collectAll({ only = null } = {}) {
   for (const provider of Object.keys(WORKBUDDY_REGIONS)) {
     if (wanted(provider)) tasks.push(workbuddyStatus(provider));
   }
+  if (wanted('zcode')) tasks.push(zcodeCredits());
+  if (wanted('loomy')) tasks.push(loomyCredits());
+  if (wanted('raccoon')) tasks.push(raccoonCredits());
+  if (wanted('qwenwork')) tasks.push(qwenworkCredits());
+  if (wanted('dumate')) tasks.push(dumateCredits());
   const results = await Promise.all(tasks);
   return results;
 }
@@ -646,9 +1011,73 @@ function renderText(rows, { width = 60 } = {}) {
       }
       continue;
     }
+    if (row.kind === 'loomy') {
+      const parts = (row.buckets || []).map(
+        (b) => `${b.label} ${fmtNum(b.remaining)} ${b.unit}`,
+      );
+      const meta = [row.account ? `账号 ${row.account}` : null, ...(row.detail || [])].filter(Boolean).join(' · ');
+      lines.push(`${head} ${parts.join('　·　') || '没有可用额度信息'}${meta ? `　（${meta}）` : ''}`);
+      lines.push('  每日积分在 Loomy 桌面端领取，插件不自动签');
+      continue;
+    }
+    if (row.kind === 'raccoon') {
+      const parts = (row.buckets || []).map(
+        (b) => `${b.label} ${fmtNum(b.remaining)} ${b.unit}`,
+      );
+      const meta = [row.account ? `账号 ${row.account}` : null, ...(row.detail || [])].filter(Boolean).join(' · ');
+      lines.push(`${head} ${parts.join('　·　') || '没有可用额度信息'}${meta ? `　（${meta}）` : ''}`);
+      lines.push('  积分按桌面端定价计费；每日额度在桌面端领取');
+      continue;
+    }
+    if (row.kind === 'qwenwork') {
+      const meta = [row.account ? `账号 ${row.account}` : null, ...(row.detail || [])].filter(Boolean).join(' · ');
+      // 没有余额读数（要宿主 JWT），只报账号、套餐与倍率数量
+      lines.push(`${head} 没有可用额度信息${meta ? `　（${meta}）` : ''}`);
+      if (row.multipliers) {
+        lines.push(`  倍率：${Object.keys(row.multipliers).length} 个模型有上游倍率`);
+      }
+      continue;
+    }
+    if (row.kind === 'dumate') {
+      const b = (row.buckets || [])[0] || {};
+      const pct = b.total > 0 ? Math.round((b.remaining / b.total) * 100) : null;
+      const bits = [
+        `剩 ${fmtNum(b.remaining)}`,
+        b.total ? `共 ${fmtNum(b.total)}` : null,
+        pct !== null ? `${pct}%` : null,
+      ].filter(Boolean);
+      const meta = [row.account ? `账号 ${row.account}` : null, ...(row.detail || [])].filter(Boolean).join(' · ');
+      lines.push(`${head} ${bits.join(' / ')}${meta ? `　（${meta}）` : ''}`);
+      // 积分包会过期：最近的那个单独提一句，不用掉就浪费了
+      if (b.expiresAt) {
+        const when = new Date(b.expiresAt);
+        if (!Number.isNaN(when.getTime())) {
+          lines.push(`  最近到期 ${when.toISOString().slice(0, 16).replace('T', ' ')} UTC`);
+        }
+      }
+      lines.push('  积分在百度搭子桌面端签到/购买，插件不自动签');
+      continue;
+    }
+    if (row.kind === 'zcode') {
+      const parts = (row.buckets || []).map(
+        (b) => `${b.label} ${fmtNum(b.remaining)}/${fmtNum(b.total)} ${b.unit}`,
+      );
+      const plan = row.plan ? `　（${row.plan}）` : '';
+      lines.push(`${head} ${parts.join('　·　') || '没有可用额度信息'}${plan}`);
+      const ends = (row.buckets || [])
+        .map((b) => b.expiresAt)
+        .filter((v) => v != null)
+        .map((v) => (typeof v === 'number' ? new Date(v * 1000) : new Date(v)))
+        .filter((d) => !Number.isNaN(d.getTime()));
+      if (ends.length > 0) {
+        const when = ends[0].toISOString().slice(0, 16).replace('T', ' ');
+        lines.push(`  到期 ${when} UTC`);
+      }
+      lines.push('  限时套餐：node router.mjs claim zcode（已注册定时任务）');
+      continue;
+    }
     if (row.kind === 'workbuddy') {
       const cred = (row.buckets || []).find((x) => x.id === 'credential');
-      const refresh = (row.buckets || []).find((x) => x.id === 'refresh');
       const svc = row.serviceRunning ? '服务在线' : '服务未运行';
       const bits = [];
       if (row.account) bits.push(String(row.account));
@@ -700,6 +1129,15 @@ module.exports = {
   codeartsCredits,
   codeartsClaim,
   CODEARTS,
+  zcodeCredits,
+  loomyCredits,
+  raccoonCredits,
+  qwenworkCredits,
+  dumateCredits,
+  ZCODE,
+  LOOMY,
+  RACCOON,
+  QWENWORK,
   collectAll,
   // 展示
   summarize,

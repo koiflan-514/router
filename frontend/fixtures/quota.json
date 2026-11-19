@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-12T03:00:00.000Z",
+  "ok": true,
+  "data": {
+    "fetchedAt": "2026-11-12T03:00:00.000Z",
+    "providers": [
+      {
+        "provider": "qoder-cn",
+        "kind": "qoder",
+        "title": "Qoder 国内版",
+        "available": true,
+        "account": "example-user",
+        "buckets": [
+          {
+            "id": "addon",
+            "label": "加购额度",
+            "total": 800,
+            "used": 704,
+            "remaining": 96,
+            "unit": "credits",
+            "resetDate": "2026-12-01T00:00:00.000Z"
+          }
+        ],
+        "checkin": {
+          "supported": false,
+          "claimable": false,
+          "claimed": false,
+          "rewardCredits": 0,
+          "note": "活动未开放"
+        },
+        "error": null,
+        "fetchedAt": "2026-11-12T03:00:00.000Z"
+      },
+      {
+        "provider": "workbuddy",
+        "kind": "workbuddy",
+        "title": "WorkBuddy 国内版",
+        "available": true,
+        "serviceRunning": true,
+        "buckets": [
+          { "id": "credential", "label": "凭证有效期", "remaining": 29, "unit": "days" }
+        ],
+        "checkin": {
+          "supported": true,
+          "claimable": true,
+          "claimed": false,
+          "rewardCredits": 100,
+          "note": "今日可领取"
+        },
+        "error": null,
+        "fetchedAt": "2026-11-12T03:00:00.000Z"
+      },
+      {
+        "provider": "trae-local",
+        "kind": "trae",
+        "title": "Trae",
+        "available": true,
+        "buckets": [
+          {
+            "id": "credits",
+            "label": "积分余额",
+            "total": null,
+            "used": null,
+            "remaining": 1200,
+            "unit": "credits"
+          }
+        ],
+        "error": null,
+        "fetchedAt": "2026-11-12T03:00:00.000Z"
+      },
+      {
+        "provider": "codearts",
+        "kind": "codearts",
+        "title": "CodeArts Agent",
+        "available": false,
+        "reason": "平台不支持",
+        "detail": "未提供额度接口",
+        "buckets": [],
+        "error": null,
+        "fetchedAt": "2026-11-12T03:00:00.000Z"
+      }
+    ]
+  }
+}

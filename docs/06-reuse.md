@@ -1,7 +1,7 @@
 # 怎么把这套经验套到新供应商
 
-目标：把第六家（比如 GitHub Copilot、Cursor、Windsurf、某某国产 IDE）也接到 pi 与
-opencode。以下是从前五家总结出来的通用路径。
+目标：把新供应商（比如 GitHub Copilot、Cursor、Windsurf、某某国产 IDE）也接到 pi 与
+opencode。以下是从前面几家总结出来的通用路径。
 
 ## 第 1 步：定性 —— 它属于哪种形态
 
@@ -119,7 +119,7 @@ if (serviceWheel !== currentWheel) warn('服务仍在跑旧反代');
 4. 新踩的坑写进 `docs/02-pitfalls.md`，**重点写「判断依据」**
 5. 如果它也有自己的一套协议，照 `docs/03-qoder-protocol.md` 补一份
 
-## 速查：五家对比
+## 速查：几家对比
 
 | | Qoder CN | Qoder 国际 | Trae | WorkBuddy CN | WorkBuddy 国际 |
 |---|---|---|---|---|---|
@@ -129,5 +129,5 @@ if (serviceWheel !== currentWheel) warn('服务仍在跑旧反代');
 | 签到 | 有接口，当前关闭 | 无接口 | 反代里看 | 无 | 无 |
 | 特殊坑 | body 编码、403 | 同 + 只有 1 个模型 | 列表要鉴权 | — | 11128、模型表 |
 
-**共性**：五家都不约而同把「真实可用的模型清单」放在客户端落盘配置里，而不是 API
+**共性**：几家都不约而同把「真实可用的模型清单」放在客户端落盘配置里，而不是 API
 响应里。这是最值得记住的一条。

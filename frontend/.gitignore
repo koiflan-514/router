@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.vite/
+.panel-data/
+*.log
+test-results/
+playwright-report/
+.env
+.env.local

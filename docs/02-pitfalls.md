@@ -137,7 +137,10 @@ workbuddy2pi global restart
 **修法**
 
 `opencode install` 优先采用 **pi 里该 provider 可见的模型清单**（pi 扩展读产品配置），
-pi 不可用才退回反代的表。国际版因此从 17 个变成 26 个可用。
+pi 不可用才退回反代的表。2026-11-04 又按上游 `/v3/config` + 逐模型实测校准了一次：
+国内版 31 个、国际版 10 个。国际版原来列出的 GPT / Grok / Gemini 等在本账号下会返回
+`11158 model is not allowed for user type [personal_free_user]`，所以先从静态表里移除；
+升级套餐后重新校准即可。
 
 **一般化**：**反代/网关自带的能力清单永远是二手信息，以「客户端落盘配置」或
 「实测能通的 id」为准。**
@@ -736,10 +739,499 @@ WorkBuddy 按同一条路写进 models.json 后，模型能列出来，选中一
 | `workbuddy` / `workbuddy-global` | 扩展 `~/.pi/agent/extensions/workbuddy.ts` | 模型表必须读桌面端落盘的目录 |
 | `trae-local` / `codearts` | `models.json`（`node scripts/pi-models.mjs`） | 没有扩展，反代 `/v1/models` 就是权威 |
 
-opencode 没有扩展机制，六家全部走反代配置（`router sync`），但 WorkBuddy 的
+扩展注册 provider 时**必须显式给 `apiKey`**（反代不校验，随便一个占位值即可）。
+pi 判断「已配置 / not configured」看的是 `provider.auth.apiKey`，只往
+`auth.json` 写条目不够：缺这一项时企业级登录选择器会把 provider 标成
+`not configured`，模型也不会进入 `available` 列表。2026-11-04 修过一次
+`workbuddy.ts` 就是这么漏的。
+
+opencode 没有扩展机制，九家全部走反代配置（`router sync`），但 WorkBuddy 的
 模型清单要用 `workbuddy2pi [global] opencode install` 从 pi 里抄——它内部就是
 `pi --list-models` 取交集，抄的正是扩展那份目录。
 
 **一般化**：**客户端说「模型不存在」时，先分清是「连不上」还是「目录不对」。
 目录不对的典型特征是：清单里有、一用就 11102 / service info not found。
 这时候权威来源是官方客户端的落盘配置，不是网关的 `/v1/models`。**
+
+---
+
+## P20. CodeArts 登录报 `DPoP proof has expired` —— 先看系统时钟
+
+**症状**
+
+浏览器 OAuth 走完，回调都拿到了，网关换取 STS 凭据时报：
+
+```
+✗ CodeArts 登录未完成：换取凭据失败: 换取凭据失败 HTTP 400:
+  {"error_code":"STS5.1804","error_msg":"invalid DPoP proof: 'DPoP proof has expired'"}
+```
+
+`login` 普通模式还会先报「已登录」直接跳过，得加 `--force` 才真的重走 OAuth。
+
+**真因**
+
+DPoP proof 的 `iat` 取自**本机时钟**（见 [10-codearts-no-agent.md](10-codearts-no-agent.md)
+第 151 行）。本机比华为 STS 慢 8 小时，proof 一出生就被判定过期。
+Windows 这边 `w32time` 服务处于 **Stopped + 手动启动**，源是 `Local CMOS Clock`、
+`Leap 指示符 3(未同步)`——双系统共用 RTC 时很容易落到这个状态。
+
+**判断依据**
+
+```
+w32tm /query /status          # 源是 Local CMOS Clock / 未同步 → 没在跟踪 NTP
+Get-Service w32time           # Status: Stopped
+node -e "fetch('https://www.baidu.com',{method:'HEAD'}).then(r=>console.log(r.headers.get('date')))"
+```
+
+把服务器 `Date` 头和 `Date.now()` 一比，差 8 小时就是它。
+
+**修法**
+
+```powershell
+Start-Service w32time
+w32tm /resync /force
+w32tm /query /status          # 应变成「层次 5 (次引用 - 与(S)NTP 同步)」，源 time.windows.com
+```
+
+然后 `node router.mjs login codearts --force`，一次就过。
+
+**一般化**：**任何 OAuth / DPoP / JWT 类报错里出现 `expired`、`iat in the future`、
+`invalid_grant`，先怀疑系统时钟，再怀疑代码。** 这类错误码把「时钟不一致」伪装成
+「凭据无效」，而错误文案会引导你去重新授权——重新授权一百次也没用。
+
+---
+
+## P21. `login` 说「已登录」，实际 refresh_token 已过期
+
+**症状**
+
+```
+$ node router.mjs login codearts
+✓ CodeArts Agent 已登录（GT-demo）
+```
+
+但调用仍报 `账号 GT-demo 的登录态已失效：refresh_token 已过期`。
+
+**真因**
+
+`loginProvider()` 先查 `authStatus(p)`，只要本地还有一份未到 `expiresAt` 的凭据
+就直接跳过（`before.ok && !force`）。**「本地文件没到期」≠「上游还认这份 refresh_token」**
+——CodeArts 的 access token 有单独的有效期，refresh_token 可能更早被上游作废。
+
+**修法**：`node router.mjs login <id> --force`。看到上面的业务报错就一律加 `--force`，
+不要信 `login` 的跳过判断。
+
+---
+
+## P22. 删掉的账号自己回来了 —— 账号池是按 uid 求并集的
+
+**症状**
+
+```
+$ node router.mjs account remove workbuddy c
+✓ 已删除账号 c（恩）
+... 账号池只剩 a、b
+$ node router.mjs account workbuddy        # 换一条命令再看
+  1  a   2  b   3  c          ← c 又回来了
+```
+
+**真因**
+
+WorkBuddy 账号池不是「目录里有什么就是什么」。`scripts/sync-homes.mjs` 每次
+router 运行的首尾都会把**所有 home + 共享库**的 slot 按 uid 求**并集**再写回，
+`writeSlots()` 只归档「目标集合里没有的文件」。删掉本地 `c.json` 后，共享库
+`.shared-home/workbuddy/sessions/c.json` 与另一套系统里那份仍然存在，下一轮
+合并就把它加回目标集合——删除等于没删，只是晚一轮生效。
+
+**修法（已实现）**
+
+删除时登记墓碑，合并阶段先按墓碑剔除：
+
+```jsonc
+// .shared-home/tombstones.json
+{ "workbuddy": ["<uid>"], "workbuddy-global": [] }
+```
+
+`account restore` 与「用同一 uid 重新登录」都会解除对应墓碑。手工恢复的办法也是
+删掉墓碑里那一项。
+
+**一般化**：**任何「按集合求并集」的同步机制，删除都不能只删本地那一份。**
+要么删掉所有副本，要么显式记录「这是有意删除的」，否则下一次合并必然复活。
+判断这类问题最快的办法是**隔一条命令再看一次**——删除后立刻查是看不出来的，
+必须等一轮同步跑完。
+
+---
+
+## P23. `login` 成功了，账号却一直显示「需要重新登录」
+
+**症状**
+
+CodeArts 浏览器登录明明成功，`list` 仍提示某账号「需要重新登录」。
+
+**真因**
+
+网关的账号状态里 `<status: error, failures: 12>` 是**上次失败留下的**。重新登录
+只换了凭证（`session`），没有清零 `failures` / `last_err`，于是账号一直停在
+`status=error`。它不会让请求立刻失败（池里还有别的健康账号），但会让提示长期
+失真，人也就不再看这条告警了。
+
+**修法（已实现）**
+
+`loginCodearts()` 在登录成功后调一次 `/admin/api/accounts` 的
+`{"action":"clear-errors"}`。这个动作**只清状态、不碰凭证**，所以适合放在登录之后。
+判断「是不是真坏了」优先看能否真实调用成功，而不是看这个历史状态字段。
+
+---
+
+## P24. 上游回 200 + `{code:1005}`，中间层翻译成「空回复」
+
+**症状**
+
+ZCode 反代（`zcode-bridge`）日志一切正常，客户端却收到：
+
+```json
+{"choices":[{"finish_reason":"stop","message":{"content":null,"role":"assistant"}}]}
+```
+
+HTTP 200、没有报错、`usage` 为 null，看起来像「模型不回话」，很容易先去怀疑模型或提示词。
+
+**真因**
+
+Z.ai 网关在「套餐额度用尽」时**仍然回 HTTP 200**，错误只写在响应体里：
+
+```json
+{"code":1005,"msg":"exceed quota limit","logid":"..."}
+```
+
+`zcode-bridge` 只在非 2xx 时走错误映射，2xx 则当作正常结果透传/翻译；
+OpenAI 方言翻译一个没有 `content` 的 Anthropic 消息，就得到 `content: null`。
+
+**修法**
+
+在 `integrations/zcode-bridge/internal/server/server.go` 增加
+`relayIfGatewayError()`：读到 2xx 响应体里 `code != 0` 的信封时，按码返回
+429/402/400（1005 → 429），消息带 `zcode upstream 1005: exceed quota limit`。
+`/v1/messages` 与 `/v1/chat/completions` 两条路径都调用它。
+该文件属于 vendored 第三方便码（MIT），本地改动记录在
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
+
+**判断依据**
+
+```bash
+curl -s http://127.0.0.1:20131/v1/quota | jq '.errors, .plans'
+```
+
+`plans: []` + `empty plan list` 说明这个账号**根本没有套餐**，
+不是额度临时用尽。桌面端自己的日志也会写 `hasActiveStartPlan: false`。
+
+**一般化**：**「HTTP 200」不等于「成功」。** 国内很多网关把业务错误放进
+2xx 响应体（`{code,msg}`），只按状态码判断的中间层会把它们变成静默失败。
+接入新供应商时，务必用一个「必然失败」的请求（额度耗尽、错误模型名）验证
+错误路径，而不是只看成功路径。
+
+---
+
+## P25. 桌面端明明登录了，反代却说「没有凭据」——KDF 的平台/用户名不一致
+
+**症状**
+
+ZCode 桌面端正常工作、额度面板有套餐，但 `zcode-bridge` 的 `/health` 写着：
+
+```json
+{"accounts":[],"planJwt":{"present":false}}
+```
+
+`/v1/quota` 回 `no usable plan credential: run login`；一旦重新 `login`，拿到的是
+另一个空账号（`plans: []`），照样不能调用。
+
+**真因**
+
+bridge 用这个 KDF 派生桌面凭据库的解密密钥：
+
+```
+sha256("zcode-credential-fallback:<platform>:<homedir>:<username>")
+```
+
+两个字符串跟桌面端（Electron）对不上：
+
+| 项 | Electron | Go 实现 |
+|---|---|---|
+| platform | `process.platform` → `win32` | `runtime.GOOS` → `windows` |
+| username | `os.userInfo().username` → `demo` | `user.Current().Username` → `DEMO-PC\demo` |
+
+任一不同，AES-GCM 解密就失败，函数静默返回空串——表现为「没有凭据」。
+
+**修法（已实现，见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)）**
+
+`runtimeOS()` 在 Windows 返回 `win32`；`desktopStoreKey()` 剥掉用户名里的
+`DOMAIN\` 前缀。
+
+**判断依据**
+
+先用桌面端日志确认它自己认为有套餐：
+
+```bash
+grep -h "hasActiveStartPlan\|planCount" ~/.zcode/v2/logs/*.log | tail -3
+# "hasActiveStartPlan": true / "planCount": 1  → 凭据是好的，问题在反代侧
+```
+
+再看凭据库里的键名：出现 `oauth:bigmodel:*` 说明桌面端登录的是**国内版
+bigmodel**，不是 z.ai——这时 `z.ai` 上的空账号永远没有套餐。
+
+**一般化**：**跨进程读加密存储时，「同一个密钥派生」比算法本身更容易出错。**
+平台名、用户名形态（带不带域名）、home 路径的写法（`C:\Users\x` vs `C:/Users/x`）
+任一处不同，解密就是静默失败。定位时先打印派生输入，别先怀疑密文。
+
+---
+
+## P26. 模型清单「刷新了」但客户端没变 —— sync 只在缺失时写入
+
+**症状**
+
+`node router.mjs sync` 说「配置已与当前开关一致，无需改动」，但 opencode 里某个
+provider 的模型数长期不变：ZCode 一直是 1 个，Qoder 国内版还留着上游已停用的 10 个。
+
+**真因**
+
+`doSyncOpenCode` 的职责是「provider 的存在性与开关一致」，逻辑是：
+
+```js
+if (want === present) continue;   // 已存在就整段跳过，不碰 models
+```
+
+于是上游加/删模型后它什么都不做。**「provider 在不在」和「provider 里的模型对不对」
+是两件事，sync 只保证前者。**
+
+**修法**
+
+`node router.mjs models [id...]`：拉各家 `/v1/models` 覆盖 `models`，provider 本体、
+baseURL、apiKey 都不动。WorkBuddy 转调 `workbuddy2pi opencode install`（它的表只能
+来自 pi 扩展）；用户自管的 `opencode.jsonc` 只提示不改。
+
+**一般化**：**幂等写入的「跳过」条件要写清是跳过什么。** 用「已存在」当跳过条件时，
+里面所有字段（模型、限额、鉴权）就永久冻结了。
+
+---
+
+## P27. 网关列出的模型点中就报错 —— 它抄了反代的静态表
+
+**症状**
+
+统一网关 `/v1/models` 里，`workbuddy/gpt-5`、`workbuddy-global/claude-4.0` 这类条目
+能选，一调用就 `11102 service info not found` / `11158 not allowed for user type`；
+反过来真正能用的 `workbuddy/deepseek-v4.1-flash` 却不在列表里。
+
+**真因**
+
+`gateway/providers.mjs` 的 `modelsOf()` 统一走反代的 `/v1/models`。WorkBuddy 两家
+反代的清单是包作者猜的静态表（见 P3），与桌面端产品目录对不上。router 侧早已改成
+「读桌面端 `acc-product-config-v*.json`」，但网关是后来加的，没跟上。
+
+**修法（已实现）**
+
+`modelsOf()` 对 `catalogFromDisk: true` 的供应商先读桌面端目录
+（`workbuddyCatalogModels`，与 `workbuddy.ts` 同一份过滤规则和 unservable 名单），
+读不到才用内置静态表，最后才退回反代清单。国际版没有桌面端目录，走内置静态表。
+
+**判断依据**
+
+```bash
+curl -s http://127.0.0.1:8785/v1/models -H 'Authorization: Bearer router-local' \
+  | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);const by={};for(const m of j.data)by[m.owned_by]=(by[m.owned_by]||0)+1;console.log(by)})"
+# workbuddy 应与 pi --list-models 里 workbuddy 的行数一致（2026-11 为 36）
+```
+
+**一般化**：**同一个「真实来源」的判定逻辑出现在两处时，后加的那处最容易漏。**
+网关加进来时只复用了「端口表」，没复用「模型表从哪来」。
+
+---
+
+## P28. 小浣熊「模型 id 写错」不报错 —— 上游静默回落到默认模型
+
+**症状**
+
+在小浣熊（`raccoon`，:8793）上把模型名写成 `raccoon-xxxx`、甚至 `no-such-model`，
+请求照样 `200`，回复也正常，但回包里的 `model` 是 `raccoon-090dd3`。看上去像
+「路由没生效」，其实是上游接受了任意模型名并回落到桌面端默认模型。
+
+**真因**
+
+`POST /api/web/llm/v2/chat/completions` 不校验 `model` 是否存在于 `model_catalog`。
+桌面端自己也只从目录里选，所以这个「宽松」从来没被暴露过。
+
+**修法（已实现）**
+
+`raccoon-proxy.js` 的 `/v1/models` 直接来自 `model_catalog`，客户端只能选到真实
+存在的 9 个；`/v1/quota` 的 `multipliers` 也用同一份目录，名字对不上时不会有倍率。
+
+**判断依据**
+
+```bash
+curl -s http://127.0.0.1:8793/v1/models \
+  | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).data.map(m=>m.id).join('\n')))"
+# 再发一次 chat/completions，看回包里的 model 是否等于你请求的那个
+```
+
+**一般化**：**「请求成功」不等于「参数生效」。** 遇到「模型像是另一个」的反馈，
+先比对回包里的 `model` 字段，而不是怀疑代理转发错了。
+
+---
+
+## P29. `visible: false` 的模型不是不能用
+
+**症状**
+
+`model_catalog` 里 `raccoon-090dd3` / `raccoon-19b265` / `raccoon-405a1c` 都是
+`visible: false`，按「隐藏即不可用」的直觉会把它们从 `/v1/models` 剔掉。剔掉之后
+桌面端默认模型反而调不了，而 `raccoon-*` 是这家唯一不额外计费的自家模型。
+
+**真因**
+
+`visible` 控制的是**桌面端模型选择器里是否展示**，不是服务端可用性。这三条正是
+`category.default_model` 指向的默认模型。
+
+**修法（已实现）**
+
+`catalogToModels()` 保留全部 `type: chat` 的条目，只把 `visible` 原样透出；排序时
+把 `default: true` 的放最前。
+
+**一般化**：**目录里的展示标记（visible / hidden / deprecated）与「能不能调」是两件事。**
+拿不准时打一发最小请求，而不是靠字段名推断。
+
+---
+
+## P30. 8792 已被前端桥接占用 —— 新反代端口要避开它
+
+**症状**
+
+小浣熊反代一开始选了 8792（网关与 Qoder 之后的空档），启动成功，但前端面板
+（`frontend/server/`，桥接固定监听 `127.0.0.1:8792`）再也起不来；反过来先起面板时
+反代会 bind 失败。
+
+**真因**
+
+`frontend/docs/00-design-baseline.md` 当初特意挑了 8792 作为「不与任何反代冲突」的
+空档，但那份文档写的是「8 家占用 7863/7864/8787/8788/8789/8790/8791/10087/20131/8785」。
+新增第九家时没有回头更新这行，于是 8792 从「空档」变成了「冲突点」。
+
+**修法（已实现）**
+
+小浣熊改用 **8793**；`frontend/docs/00-design-baseline.md` 的端口占用清单补上 8793。
+
+**判断依据**
+
+```bash
+netstat -ano | findstr :8792    # 有 LISTENING 就不是空档
+node router.mjs gateway doctor  # 端口交叉校验只比反代之间，不比前端桥接
+```
+
+**一般化**：**「空闲端口」是快照，不是事实。** 加新服务前重新 netstat 一次，并把
+新的占用写回那份端口清单——否则下一个人会踩同一颗雷。
+
+---
+
+## P31. 本地限流「看起来生效了」，其实流式请求早就把并发位还了
+
+**症状**
+
+给反代加了并发上限 2，用非流式请求测，6 个并发被正确分成 3 批。但一旦换成
+流式对话（`stream: true`），同时开 4 路全都能立刻连上——并发限制形同虚设。
+
+**真因**
+
+`pipeUpstream` 的实现是：
+
+```js
+stream.pipe(res);   // 立刻返回
+```
+
+`pipe()` 只是把管道接上，函数马上就返回了。调用方据此认为「这一路请求结束了」，
+于是把限流执行位还回去——而流其实还在传输，可能持续几十秒。
+
+同理，网关侧 `acc.inFlight` 也是在**响应头到达**时就减了。上游看到的仍然是
+N 路并行，这正是「并发限制」要挡的东西。
+
+**判断依据**
+
+流式请求进行中查健康端点，`inFlight` 应该是 ≥ 1：
+
+```bash
+curl -s http://127.0.0.1:8793/health \
+  | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).limits))"
+# 修之前：inFlight=0（流还在传，但计数已经归零）
+# 修之后：inFlight=1~2
+```
+
+**修法（已实现）**
+
+`pipeUpstream` 改成返回 Promise，在 `res` 的 `finish` / `close` 或 `stream` 的
+`error` 时才 resolve。网关侧的 `finishAttempt()` 放进 `relay()` 的 `finally`。
+
+**一般化**：**「函数返回了」不等于「这件事做完了」。** 所有基于「请求生命周期」
+的记账（并发、连接池、配额占用），都要挂在真正的完成事件上，而不是启动事件上。
+`pipe()` / `write()` / `flush()` 这类名字里带「开始」意味的 API 尤其容易骗人。
+
+---
+
+## P32. 限流把正常 agent 循环误伤成 429
+
+**症状**
+
+加了本机限流后，简单的单轮对话一切正常，但让 agent 做一次稍微复杂的任务就频繁
+`429 本地限流`。上游额度明明充足，账号也正常。
+
+**真因**
+
+第一版把 `rpm`（每分钟请求数）压到 12、`minIntervalMs` 给到 4000ms，理由是
+「人不会一秒发好几个请求」。但 **agent 循环不是人在打字**：模型回完最后一段，
+客户端立刻发下一个工具调用，间隔只有几百毫秒。一轮复杂任务 30~50 步很常见，
+按 12 rpm 算，第 13 步就会被自己挡住。
+
+**判断依据**
+
+```bash
+node router.mjs gateway usage --days 1   # 看单轮任务的请求密度
+```
+
+一次任务几十次请求、每次间隔 300~800ms，就是典型的 agent 循环。
+
+**修法（已实现）**
+
+`rpm` 放宽到 20（safe）/ 40（balanced）/ 90（fast），`minIntervalMs` 降到
+1500~3000ms。真正收紧的是**并发**——套流的特征是「同一账号 N 路并行」，
+不是「连续发了 40 个请求」。
+
+**一般化**：**限流的参数要按「真实使用形态」定，不是按「人的直觉」定。**
+写限流前先量一遍正常使用的请求密度；否则第一个被限流挡住的就是自己。
+
+---
+
+## P33. 只给网关加限流，客户端直连反代就绕过去了
+
+**症状**
+
+网关里设了 `maxInFlight: 2`，经网关的请求确实被限住了。但 opencode 里配的是
+`http://127.0.0.1:8793/v1`（直连反代），并行跑子代理时上游照样收到 10 路并发。
+
+**真因**
+
+网关是**可选叠加层**，不是必经之路。每家反代都有自己的端口，客户端可以直连。
+限流只做在网关，等于只挡住了「愿意走网关的那部分流量」。
+
+**判断依据**
+
+```bash
+node router.mjs list    # 看客户端实际配的是哪一层
+grep -r "8793\|8785" ~/.config/opencode/opencode.json
+```
+
+**修法（已实现）**
+
+三层都做：
+
+1. 反代自身（`raccoon-proxy` / `loomy-proxy`）的 `LIMITER`
+2. 网关的 `scheduler.limiterFor(id)`
+3. 第三方反代内置限流（`router limits --apply`，目前只有 CodeArts）
+
+**一般化**：**在「可以绕过」的架构里，防护必须放在最内层。** 只在外层做的限制，
+等价于「建议」而不是「约束」。

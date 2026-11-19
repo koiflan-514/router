@@ -1,7 +1,7 @@
 # 反代进程生命周期（router 直管）
 
-`router.mjs` 从 2026-11 起不再只是「改开关 + 探端口」，而是真正持有六家反代
-（Trae 两段式，共七个子进程）：
+`router.mjs` 从 2026-11 起不再只是「改开关 + 探端口」，而是真正持有九家反代
+（Trae 两段式，共十个子进程）：
 
 | 供应商 | 端口 | 实际命令行 | 日志 |
 |---|---|---|---|
@@ -11,6 +11,9 @@
 | CodeArts Agent | 10087 | `codearts2api.exe -data ... -port 10087` | `E:\router\integrations\codearts2api\run.log` |
 | WorkBuddy 国内版 | 8787 | `uv run --with ... python -m codebuddy_proxy --port 8787` | `~/.workbuddy2api/proxy.log`、`proxy-stdout.log` |
 | WorkBuddy 国际版 | 8788 | 同上 `--global --endpoint https://www.codebuddy.ai` | `~/.workbuddy2api/global/proxy.log`、`global/proxy-stdout.log` |
+| ZCode (Z.ai) | 20131 | `zcode-bridge.exe` | `integrations/zcode-bridge/run.log` |
+| Loomy（讯飞） | 8791 | `node integrations/loomy2api/loomy-proxy.js --port 8791` | `.run/loomy.log` |
+| 商汤小浣熊 | 8793 | `node integrations/raccoon2api/raccoon-proxy.js --port 8793` | `.run/raccoon.log` |
 
 `router.mjs list` 里的 **PID** 是监听端口的那个进程。WorkBuddy 的 `uv` 会再拉起
 Python，外层 uv 与内层 cpython 的 PID 不同，停止时按「记录过的 PID 树 + 监听端口」
@@ -95,7 +98,7 @@ WorkBuddy 的 `uv` 是三层链（`uv.exe` → 缓存里的 builds python → cp
 ## 登录自启
 
 ```bash
-node router.mjs service install              # 六家都注册
+node router.mjs service install              # 九家都注册
 node router.mjs service install trae-local    # 只注册一家
 node router.mjs service status
 node router.mjs service uninstall trae-local  # 停止并移除
@@ -119,7 +122,7 @@ Windows 计划任务（`ONLOGON`）。脚本内容只有一行：调用
 | PID 对不上 | `list` 显示的是端口所有者；WorkBuddy 外层 uv 的 PID 在 `.run/processes.json` |
 | 改了源码没生效 | 确认 router 找的是哪份脚本：`doctor` 里的路径 |
 
-## 加第七家
+## 加新一家
 
 在 `router.mjs` 的 `PROVIDERS` 里加一项：
 
@@ -127,6 +130,7 @@ Windows 计划任务（`ONLOGON`）。脚本内容只有一行：调用
 - `processes`：一个或多个进程（按启动顺序）
 - 每个进程给 `command` / `args` / `cwd` / `env` / `log` / `errLog` / `waitMs`
 - `ocProvider`：写进 opencode 的 provider id
+- `modelsPath`（可选）：模型清单路径；Loomy 用 `/models?type=chat` 过滤生图模型
 
 然后在 `scripts/health.mjs` 的 `SOURCES` 里加一行，`router.mjs` 会自动获得
 `list` / `up` / `down` / `restart` / `logs` / `doctor` / `service`。

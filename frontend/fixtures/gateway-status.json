@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-12T03:00:00.000Z",
+  "ok": true,
+  "data": {
+    "ok": true,
+    "version": "1.0.0",
+    "pid": 5678,
+    "uptimeSec": 3600,
+    "strict": false,
+    "openMode": true,
+    "quotaSnapshotAt": 1762912800000,
+    "providers": [
+      {
+        "id": "trae-local",
+        "running": true,
+        "dialect": "openai",
+        "port": 8787,
+        "weight": 12.5,
+        "quotaRatio": 0.62,
+        "inFlight": 1,
+        "consecutiveFails": 0,
+        "successRate": 0.984,
+        "cooldownUntil": null,
+        "cooldownKind": null,
+        "sticky": 2
+      },
+      {
+        "id": "qoder-cn",
+        "running": true,
+        "dialect": "anthropic",
+        "port": 8789,
+        "weight": 9.5,
+        "quotaRatio": null,
+        "inFlight": 0,
+        "consecutiveFails": 2,
+        "successRate": 0.91,
+        "cooldownUntil": 1762913400000,
+        "cooldownKind": "rate_limited",
+        "sticky": 0
+      },
+      {
+        "id": "codearts",
+        "running": false,
+        "dialect": null,
+        "port": null,
+        "weight": 0,
+        "quotaRatio": null,
+        "inFlight": 0,
+        "consecutiveFails": 0,
+        "successRate": 0
+      }
+    ]
+  }
+}

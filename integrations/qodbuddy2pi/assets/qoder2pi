@@ -581,11 +581,48 @@ function uninstallService(regionKey, { quiet = false } = {}) {
   return 0;
 }
 
-/** 已注册就拉起，没注册就先注册。 */
+/**
+ * 只在前台/后台临时拉起代理，**不碰计划任务**。
+ *
+ * 给 `opencode install` 用：那条命令的职责是写配置，顺手注册一个登录自启
+ * 是越权——用户只想要模型列表，结果开机多了一个常驻进程。
+ * 想常驻请显式跑 `qoder2pi proxy install-service`。
+ */
+function spawnProxy(regionKey, { quiet = false } = {}) {
+  const region = PROXY[regionKey];
+  if (proxyHealthy(regionKey)) {
+    if (!quiet) ok(`${region.title}：代理已在运行，http://127.0.0.1:${region.port}/v1`);
+    return 0;
+  }
+  if (!fs.existsSync(PROXY_JS)) {
+    fail(`找不到代理脚本 ${PROXY_JS}。重新运行安装脚本（qodbuddy2pi install）`);
+  }
+  const log = proxyLogFile(regionKey);
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  const out = fs.openSync(log, 'a');
+  const child = execFile(
+    process.execPath,
+    [PROXY_JS, '--region', regionKey, '--port', String(region.port), '--log-file', log],
+    { detached: true, stdio: ['ignore', out, out], windowsHide: true },
+  );
+  child.unref();
+  fs.closeSync(out);
+  if (!waitProxyHealthy(regionKey)) {
+    warn(`${region.title}：代理没能在 8 秒内起来，日志：${log}`);
+    return 1;
+  }
+  if (!quiet) {
+    ok(`${region.title}：代理已启动，http://127.0.0.1:${region.port}/v1（未注册开机自启）`);
+  }
+  return 0;
+}
+
 function startProxy(regionKey, { quiet = false } = {}) {
   const region = PROXY[regionKey];
   const names = serviceNames(regionKey);
   const state = serviceStatus(regionKey);
+  // 已注册就拉起，没注册先注册——这是 `proxy start` 的语义。只想临时拉起
+  // （不落地开机自启）请用 spawnProxy。
   if (!state.registered) return installService(regionKey, { quiet });
 
   if (IS_MAC) {
@@ -817,7 +854,10 @@ function cmdOpencode(argv) {
       }
     }
     let bad = 0;
-    for (const key of loggedIn) bad += startProxy(key) === 0 ? 0 : 1;
+    // 注意用 spawnProxy 而不是 startProxy：后者在没注册服务时会顺手装一个
+    // 登录自启（installService）。`opencode install` 只负责写配置，不该改变
+    // 开机行为——要常驻请显式跑 `qoder2pi proxy install-service`。
+    for (const key of loggedIn) bad += spawnProxy(key) === 0 ? 0 : 1;
     if (bad) {
       warn('有代理没起来，opencode 配置先不写（否则会指向一个死端口）');
       return 1;
@@ -927,6 +967,10 @@ async function cmdCredits(argv) {
           const r = await q.traeClaim();
           console.log(`  [${row.title}] ${pending.map((a) => a.name).join('、')} 今日未签到；${r.reason}`);
         }
+        continue;
+      }
+      if (row.kind === 'loomy') {
+        console.log(`  [${row.title}] 每日积分在 Loomy 桌面端领取，CLI 不自动签`);
         continue;
       }
       if (row.kind !== 'qoder') continue;

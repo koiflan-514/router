@@ -6,19 +6,23 @@
  *   workbuddy-global  国际版，http://127.0.0.1:8788/v1
  *
  * 与 pi-provider-qoder 的做法一致：provider 由扩展在启动时注册，模型目录尽量贴近
- * 账号的真实目录，认证不写死在扩展里（走 pi 的 /login 或 ~/.pi/agent/auth.json）。
- * 两个反代都不校验客户端传来的 key，所以 auth.json 里的 key 只需是个占位值。
+ * 账号的真实目录。两个反代都不校验客户端传来的 key，所以这里用一个固定的占位值。
+ *
+ * `apiKey` 必须显式给出：pi 判断「provider 是否已配置」看的是 provider.auth.apiKey，
+ * 只写 auth.json 不够。缺了这项时，/login 和模型选择器会把两家 WorkBuddy 都标成
+ * “not configured”，模型也进不了 available 列表。
  *
  * 模型来源（两个 provider 同一机制，各读各的目录，多份时取 mtime 最新）：
  *   国内版  ~/.workbuddy/cache/acc-product-config-v*.json（WorkBuddy 桌面端落盘）
  *   国际版  ~/.workbuddy-ai/cache/acc-product-config-v*.json（国际版客户端 WorkBuddy AI 落盘）
- *   读不到时回退到各自的内置静态表。
+ *   读不到时回退到各自的内置静态表；静态表按上游 /v3/config 的当前目录维护（2026-11-04）。
  *
  * 不要用反代自带的 models_config.domestic/global.json 当模型目录：那是包作者按
  * 公开资料猜的，与服务端真实可服务的 id 对不上——国际版那张表里的 claude-4.0、
  * gpt-5、gemini-2.5-pro 在客户端目录里根本不存在，请求一律返回
  * `{"code":11102,"msg":"model [xxx] service info not found"}`。
- * 以客户端落盘的目录为准，2026-10-12 实测 27 个对话模型里 26 个可用。
+ * 以客户端落盘的目录为准；2026-11-04 逐个实测后剔除了 11102 / 11150 / 11134
+ * 的条目，国际版则只保留当前免费账号能调通的模型。
  */
 
 import fs from "node:fs";
@@ -50,10 +54,15 @@ const UNSERVABLE_MODEL_IDS = new Set([
   "completion-gf",
   "deepseek-v3-1",
   "deepseek-v3-1-volc",
+  "deepseek-v3-1-lkeap", // 2026-11-04 实测 11134 临时不可用
+  "deepseek-v3-0324-lkeap", // 2026-11-04 实测 11102 service info not found
+  "deepseek-r1-0528-lkeap", // 同上
   "default-1.1", // Claude-3.7-Sonnet
   "default-1.2", // Claude-4.0-Sonnet
   "glm-4.6",
   "glm-4.6v",
+  "glm-5.0-turbo", // 2026-11-04 实测 11150 reasoning effort 不支持
+  "hunyuan-2.0-instruct", // 2026-11-04 实测 11102 service info not found
   "hy4-preview-x",
   "kimi-k2-instruct-taiji",
   "kimi-k2-thinking",
@@ -74,34 +83,35 @@ type ModelSeed = [
 ];
 
 const STATIC_MODELS: ModelSeed[] = [
+  ["auto", "Auto", 256000, 32000, 1, 1],
   ["fast-model", "快速", 300000, 48000, 1, 1],
   ["balanced-model", "均衡", 300000, 48000, 1, 1],
   ["deep-model", "极致", 300000, 48000, 1, 1],
   ["hy3", "Hy3", 192000, 64000, 1, 1],
+  ["hy3-b", "Hy3", 192000, 64000, 1, 1],
+  ["hy3-c", "Hy3", 192000, 64000, 1, 1],
   ["hy3-x", "Hy3", 192000, 64000, 1, 1],
-  ["hy4-preview", "Hy4 preview", 1000000, 64000, 1, 1],
-  ["hy4-preview-dev", "Hy4 preview", 1000000, 64000, 1, 1],
-  ["glm-5v-turbo", "GLM-5v-Turbo", 200000, 64000, 1, 1],
-  ["glm-5.3", "GLM-5.3", 1000000, 48000, 1, 1],
-  ["glm-5.3-flash", "GLM-5.3-Flash", 1000000, 32000, 1, 1],
-  ["glm-5.2", "GLM-5.2", 1000000, 48000, 1, 1],
-  ["glm-5.1", "GLM-5.1", 200000, 48000, 1, 1],
-  ["glm-5.0-turbo", "GLM-5.0-Turbo", 200000, 48000, 1, 1],
+  ["hy4-preview-ctrl", "Hy4 preview", 960000, 64000, 1, 1],
+  ["hy4-preview-exp", "Hy4 preview", 960000, 64000, 1, 1],
+  ["glm-5.3", "GLM-5.3", 1000000, 64000, 1, 1],
+  ["glm-5.3-flash", "GLM-5.3-Flash", 1000000, 131072, 1, 1],
+  ["glm-5.2", "GLM-5.2", 1000000, 64000, 1, 1],
   ["kimi-k3-1", "Kimi-K3", 1000000, 32000, 1, 1],
-  ["kimi-k2.7", "Kimi-K2.7-Code", 256000, 32000, 1, 1],
-  ["kimi-k2.6", "Kimi-K2.6", 256000, 32000, 1, 1],
+  ["kimi-k2.8-preview", "Kimi-K2.8-Preview", 1000000, 64000, 1, 1],
   ["kimi-k2.5", "Kimi-K2.5", 256000, 32000, 1, 1],
-  ["minimax-m3", "MiniMax-M3", 512000, 128000, 1, 1],
   ["minimax-m2.7", "MiniMax-M2.7", 200000, 48000, 1, 1],
   ["deepseek-v4-flash", "Deepseek-V4-Flash", 1000000, 50000, 1, 1],
-  ["deepseek-v4.1-flash", "Deepseek-V4.1-Flash", 1000000, 128000, 1, 1],
-  ["deepseek-v4-pro", "Deepseek-V4-Pro", 1000000, 50000, 1, 1],
+  ["deepseek-v4.1-flash", "DeepSeek-V4.1-Flash", 1000000, 128000, 1, 1],
+  ["deepseek-v4-pro", "DeepSeek-V4-Pro", 1000000, 128000, 1, 1],
   ["deepseek-v3-2-volc", "DeepSeek-V3.2", 96000, 32000, 1, 1],
-  ["deepseek-v3-1-lkeap", "DeepSeek-V3-1", 96000, 32000, 1, 0],
-  ["deepseek-v3-0324-lkeap", "DeepSeek-V3-0324", 112000, 16000, 1, 0],
-  ["deepseek-r1-0528-lkeap", "DeepSeek-R1-0528", 96000, 16000, 1, 0],
-  ["hunyuan-2.0-instruct", "Hunyuan-2.0-Instruct", 128000, 16000, 1, 1],
   ["hunyuan-chat", "Hunyuan-Turbos", 128000, 8192, 1, 0],
+  ["space-bunny", "Space-Bunny", 1000000, 128000, 1, 1],
+  ["step-5-preview", "Step-5-Preview", 1000000, 64000, 1, 1],
+  ["mimo-v2.6-pro", "Xiaomi MiMo-V2.6-Pro", 1000000, 128000, 1, 1],
+  ["minimax-m3.1-flash", "MiniMax-M3.1-Flash", 1000000, 128000, 1, 1],
+  ["kimi-k3.1-pro", "Kimi-K3.1-Pro", 1000000, 32000, 1, 1],
+  ["hy4free", "Hy4", 960000, 64000, 1, 1],
+  ["hy4std", "Hy4", 960000, 64000, 1, 1],
 ];
 
 /**
@@ -110,32 +120,19 @@ const STATIC_MODELS: ModelSeed[] = [
  * 太小的值会被上游以 `integer_below_min_value` 拒绝）。
  */
 const GLOBAL_STATIC_MODELS: ModelSeed[] = [
-  ["default-model", "Auto", 176000, 24000, 1, 1],
-  ["fast-model", "Fast", 200000, 32000, 1, 1],
-  ["balanced-model", "Balanced", 256000, 32000, 1, 1],
-  ["primary-model", "Primary", 272000, 72000, 1, 1],
-  ["deepseek-v4.1-flash", "Deepseek-V4.1-Flash", 1000000, 128000, 1, 1],
+  // 2026-11-04 用当前免费账号逐个实测：下面这些返回 200；GPT / Grok / Gemini 等
+  // 会返回 11158 “model is not allowed for user type [personal_free_user]”，
+  // 先不列出来，升级套餐后按上游 /v3/config 重新校准即可。
+  ["default-model", "Auto", 176000, 24000, 1, 0],
+  ["max-model", "Max", 272000, 72000, 1, 1],
   ["deepseek-v4.1-flash-sg", "Deepseek-V4.1-Flash", 1000000, 128000, 1, 1],
-  ["hy4-preview", "Hy4 preview", 1000000, 64000, 1, 1],
-  ["hy3", "Hy3", 192000, 64000, 1, 1],
-  ["kimi-k2.8-preview", "Kimi-K2.8-Preview", 1000000, 32000, 1, 1],
-  ["kimi-k3", "Kimi-K3", 1000000, 32000, 1, 1],
-  ["kimi-k2.6", "Kimi-K2.6", 256000, 32000, 1, 1],
-  ["gemini-3.5-flash", "Gemini-3.5-Flash", 1000000, 65536, 1, 1],
-  ["glm-5.3", "GLM-5.3", 1000000, 48000, 1, 1],
   ["glm-5.3-flash", "GLM-5.3-Flash", 1000000, 32000, 1, 1],
-  ["glm-5.2", "GLM-5.2", 1000000, 48000, 1, 1],
-  ["grok-4.7", "Grok-4.7", 500000, 128000, 1, 1],
-  ["gpt-6-astra", "GPT-6-Astra", 1000000, 128000, 1, 1],
-  ["gpt-6.1-sol", "GPT-6.1-Sol", 1000000, 128000, 1, 1],
-  ["gpt-6-sol", "GPT-6-Sol", 1000000, 128000, 1, 1],
-  ["gpt-6-luna", "GPT-6-Luna", 1000000, 128000, 1, 1],
-  ["gpt-5.6-sol", "GPT-5.6-Sol", 1000000, 128000, 1, 1],
-  ["gpt-5.6-terra", "GPT-5.6-Terra", 1000000, 128000, 1, 1],
-  ["gpt-5.6-luna", "GPT-5.6-Luna", 1000000, 128000, 1, 1],
-  ["gpt-5.5", "GPT-5.5", 1000000, 128000, 1, 1],
-  ["gpt-5.4", "GPT-5.4", 272000, 72000, 1, 1],
-  ["step-5-preview", "Step-5-Preview", 1000000, 64000, 1, 1],
+  ["hy4free", "Hy4", 1000000, 64000, 1, 1],
+  ["hy4std", "Hy4", 1000000, 64000, 1, 1],
+  ["hy3", "Hy3", 192000, 64000, 1, 1],
+  ["glm-5.3", "GLM-5.3", 1000000, 48000, 1, 1],
+  ["minimax-m3.1-flash", "MiniMax-M3.1-Flash", 1000000, 128000, 1, 1],
+  ["kimi-k3", "Kimi-K3", 1000000, 32000, 1, 1],
 ];
 
 /**
@@ -174,6 +171,8 @@ interface CatalogSource {
   brand: string;
   /** 目录读不到时提示语里用的名字。 */
   label: string;
+  /** 桌面端目录里没有、但反代/上游确实支持的模型（目前只有国内版的 auto）。 */
+  supplementIds?: string[];
 }
 
 const DOMESTIC_SOURCE: CatalogSource = {
@@ -182,6 +181,9 @@ const DOMESTIC_SOURCE: CatalogSource = {
   staticModels: STATIC_MODELS,
   brand: "WorkBuddy",
   label: "WorkBuddy",
+  // 桌面端把 Auto 当成模式而不是模型，但反代 /v3/config 和 /v1/models 都有它，
+  // 实测也能直接调用；补进来，避免客户端里缺少这个最常用的入口。
+  supplementIds: ["auto"],
 };
 
 const GLOBAL_SOURCE: CatalogSource = {
@@ -281,6 +283,13 @@ function loadModels(source: CatalogSource): LoadedModels {
     return fromStaticTable(source, `${file} 里没有可用的对话模型`);
   }
 
+  // 目录里没有、但上游确实支持的补充项（auto）：放在最前面，保持顺序稳定。
+  for (const id of [...(source.supplementIds ?? [])].reverse()) {
+    if (seeds.some((seed) => seed[0] === id)) continue;
+    const extra = source.staticModels.find((seed) => seed[0] === id);
+    if (extra) seeds.unshift(extra);
+  }
+
   return {
     models: seeds.map((seed) => toModelConfig(seed, source.brand)),
     sourcePath: file,
@@ -313,6 +322,9 @@ export default function workbuddy(pi: ExtensionAPI) {
       name,
       baseUrl,
       api: "openai-completions",
+      // 反代不校验入站 key；显式给出才能让 pi 把 provider 标成已配置。
+      // auth.json 里的真实凭证优先于这个占位值。
+      apiKey: "workbuddy-local",
       models: initial.models,
       async refreshModels() {
         const fresh = loadModels(source);

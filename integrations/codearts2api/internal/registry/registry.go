@@ -28,8 +28,12 @@ type Model struct {
 
 // Fallback 是上游模型接口不可达时使用的兜底清单。
 //
-// 取自 2026-10 实测的 `GET /v1/model/builtin`（积分通道，benefit 通道已下线）。
+// 取自 2026-11 实测的 `GET /v1/model/builtin`（积分通道，benefit 通道已下线）。
 // 上游不返回上下文长度，因此 Context / MaxOutput 留空（控制台显示「—」）。
+//
+// Qwen3-VL-235B / kimi-k2.6-vl 已于 2026-11 下线：调用返回 404
+// 「模型 X 不存在」，上游清单里也不再有它们。留在这里会在清单拉取失败时
+// 把它们重新写回 opencode/pi，点中就报错，所以删掉。
 var Fallback = []Model{
 	{ID: "glm-5.3", Name: "GLM-5.3", Credit: "0.79x", Source: "upstream",
 		Desc: "【限时体验】面向复杂编程与长程任务"},
@@ -43,10 +47,6 @@ var Fallback = []Model{
 		Desc: "均衡推理效果与性能"},
 	{ID: "deepseek-v4.1-flash", Name: "DeepSeek-V4.1-Flash", Credit: "0.18x", Source: "upstream",
 		Desc: "【限时体验】能力更高, 速度更快"},
-	{ID: "Qwen3-VL-235B", Name: "Qwen3-VL-235B", Source: "upstream",
-		Desc: "多模态模型"},
-	{ID: "kimi-k2.6-vl", Name: "Kimi-K2.6-VL", Source: "upstream",
-		Desc: "编程性能突出"},
 }
 
 // aliases 是内置别名，指向 CodeArts 上游模型 ID。

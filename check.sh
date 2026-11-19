@@ -18,6 +18,10 @@ fi
 
 case "$MODE" in
   quick)
+    node "$HERE/integrations/limits/limiter.test.cjs" | tail -n 3
+    node "$HERE/integrations/limits/limiter.wait.test.cjs" | tail -n 2
+    node "$HERE/gateway/selftest.mjs" | tail -n 3
+    node "$HERE/router.mjs" limits --check | tail -n 3
     node "$HERE/scripts/health.mjs" --no-probe
     ;;
   tools)

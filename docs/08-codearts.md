@@ -1,11 +1,15 @@
 # CodeArts Agent（华为云码道）
 
-第六家接入。与前面五家最大的不同：**没有自己写代理，而是复用了一个成熟的第三方
+CodeArts 接入。与前面几家最大的不同：**没有自己写代理，而是复用了一个成熟的第三方
 Go 网关**（[2951461586/CodeArts2API](https://github.com/2951461586/CodeArts2API)）。
 
 ## 为什么用别人的实现
 
 先尝试自己实现（照 Qoder 的路子写一个 `codearts-proxy.js`），失败在签名这一步：
+
+> 只想“不装 Agent 也能用”的最小实现，见
+> [10-codearts-no-agent.md](10-codearts-no-agent.md)：浏览器 OAuth + 签名网关，
+> 不需要 DPAPI、`state.vscdb` 或 `agentkernelServer.exe`。
 
 华为云用的是 **`SDK-HMAC-SHA256`**，它的 CanonicalRequest 有两处**和官方文档不一致**
 的实现细节（见下面 P17）。我按文档写出来的签名一直返回 `APIG.0301 Unauthorized`，
@@ -132,7 +136,7 @@ router 还会从 `/v1/models` 拉目录并写进 `opencode.json`（带 `Authoriz
 | `glm-5.3` 只支持流式 | 非流式返回 400 + 空 body | 网关自动改用流式并在本地聚合，且记住该模型 |
 | 不认 `developer` 角色 | `Message role cannot empty` | 客户端侧设 `supportsDeveloperRole: false`（P18） |
 
-## 与其它五家的对比
+## 与其它几家的对比
 
 | | Qoder | Trae | WorkBuddy | CodeArts |
 |---|---|---|---|---|
