@@ -2,7 +2,7 @@
 /**
  * router.mjs — 统一启动、停止、重启、探活本机所有反代。
  *
- * 十家全常驻会同时挂着十几个子进程（Trae 两段式），而多数时候你只用其中一两个。这里让
+ * 十二家全常驻会同时挂着十几个子进程（Trae 两段式），而多数时候你只用其中一两个。这里让
  * 「开哪几个」变成一个显式选择，并且这个选择要落到三处，缺一处就会出现
  * 「以为关了其实还在跑」或「以为开了但客户端看不到」：
  *
@@ -10,7 +10,7 @@
  *   2. pi 的模型可见性     —— provider 注册与模型目录
  *   3. opencode 的 provider —— 写进 opencode.json 的那份
  *
- * 从 2026-11 起，router 直接托管全部十家反代，不再依赖 qoder2pi /
+ * 从 2026-11 起，router 直接托管全部十二家反代，不再依赖 qoder2pi /
  * workbuddy2pi 的计划任务来拉起进程（计划任务在本机并不总是可靠）：
  *
  *   - 每家的命令行、环境变量、日志、端口都写在 PROVIDERS 里
@@ -93,12 +93,12 @@ const QWENWORK_DIR =
 // 代理自动发现端口、读桌面端落盘的模型目录，并复用其免鉴权的 qianfanproxy。
 const DUMATE_DIR =
   process.env.ROUTER_DUMATE_DIR || path.join(INTEGRATIONS_DIR, 'dumate2api');
-// WPS 灵犀反代：本仓库自写。**只接积分**（上游没有可直达的 OpenAI 兼容对话入口），
-// 从 Electron cookie jar 解出 wps_sid，读智点余额与收支明细。
+// WPS 灵犀反代：本仓库自写。自己 spawn lingxi.exe app-server（JSON-RPC stdio），
+// 从 Electron cookie jar 解出 wps_sid 鉴权，提供 OpenAI 兼容对话 + 智点余额。
 const LINGXI_DIR =
   process.env.ROUTER_LINGXI_DIR || path.join(INTEGRATIONS_DIR, 'lingxi2api');
 
-// 统一网关：把上面十家拼成一个端口、两种方言。它不是「第十一家反代」，而是前面的一层，
+// 统一网关：把上面十二家拼成一个端口、两种方言。它不是「第十三家反代」，而是前面的一层，
 // 所以端口单独留一个（默认 8785，不占用任何一家的端口段）。
 const GATEWAY_DIR = path.join(HERE, 'gateway');
 const GATEWAY_PORT = Number(process.env.ROUTER_GATEWAY_PORT || 8785);
@@ -314,7 +314,7 @@ function authStatus(p) {
 
 // ---------------------------------------------------------------- 账号切换
 //
-// 十家里有五家的账号可以切换，且生效方式各不相同：
+// 各家反代里有几家的账号可以切换，且生效方式各不相同：
 //
 //   WorkBuddy 国内/国际  ~/.workbuddy2api/sessions{,-global}/<slot>.json 是账号池，
 //                        ~/.codebuddy{,-global}-session.json 是生效凭证。切换 = 把目标
@@ -2719,16 +2719,16 @@ const PROVIDERS = [
   },
   {
     id: 'lingxi',
-    title: 'WPS 灵犀（积分）',
+    title: 'WPS 灵犀',
     port: 8796,
     kind: 'lingxi',
     control: 'spawn',
-    // **只接积分，不接对话**：灵犀是 Electron + Go app-server（JSON-RPC stdio）的
-    // agent 形态，上游没有可直达的 OpenAI 兼容面（agent-runtime/chat/completions
-    // 对任何 body 都回 400，也没有模型清单接口）。所以这里 creditsOnly：
-    // router 托管进程、账号与体检，但**不写 opencode/pi 的模型 provider**，
-    // 免得客户端里出现一个选中就报错的假模型。余额由 credits 插件读 :8796/v1/quota。
-    creditsOnly: true,
+    // 本仓库自写的零依赖 Node 反代：自己 spawn 一个 lingxi.exe app-server，
+    // 用桌面端 cookie 库里的 wps_sid 鉴权，把 OpenAI 的 /v1/models 与
+    // /v1/chat/completions 翻译成它的原生 JSON-RPC（initialize → session/start →
+    // run/start → 收集 component.content 事件）。同时保留只读积分端点。
+    // 注意：灵犀是完整 agent，不吐 OpenAI tool_calls，模型标 tool_call=false，
+    // 适合对话，不适合当 opencode/pi 的编码 agent 驱动（见 README）。
     processes: [
       {
         name: 'lingxi-proxy',
@@ -2744,10 +2744,13 @@ const PROVIDERS = [
         log: () => path.join(RUN_DIR, 'lingxi.log'),
         errLog: () => path.join(RUN_DIR, 'lingxi.log'),
         ensureDirs: [RUN_DIR],
-        waitMs: 20000,
+        waitMs: 25000,
       },
     ],
     logs: [path.join(RUN_DIR, 'lingxi.log')],
+    ocProvider: 'lingxi',
+    ocName: 'WPS 灵犀（Lingxi）',
+    ocApiKey: 'lingxi-local',
   },
   {
     id: 'workbuddy',
@@ -2810,7 +2813,7 @@ const PROVIDERS = [
     ocProvider: 'workbuddy-global',
   },
   {
-    // 统一网关：把上面十家合成一个端口 + 两种方言。
+    // 统一网关：把上面十二家合成一个端口 + 两种方言。
     // 它不是反代（没有上游），所以 processes 里只有一个 node 进程，且**不写 opencode**
     // ——是否把客户端切到网关上由用户决定（`router gateway install` 会写一份 provider）。
     id: 'gateway',
@@ -2833,7 +2836,7 @@ const PROVIDERS = [
       },
     ],
     logs: [path.join(RUN_DIR, 'gateway.log')],
-    // 网关的模型目录是十家的并集，由它自己按需拉取，所以不参与 router 的写 provider 流程
+    // 网关的模型目录是十二家的并集，由它自己按需拉取，所以不参与 router 的写 provider 流程
     ocProvider: 'router-gateway',
     ocName: 'router 统一网关',
     ocApiKey: 'router-local',
@@ -4735,7 +4738,7 @@ async function addProviderFromModels(p) {
  */
 async function refreshProviderModels(p) {
   if (p.gateway) {
-    // 网关的模型清单是十家的并集，由 `router gateway install` 写；
+    // 网关的模型清单是十二家的并集，由 `router gateway install` 写；
     // 它不是反代，没有自己的 /v1/models 目录可刷新
     return { ok: true, skipped: true, reason: '网关的模型清单由 gateway install 写入' };
   }
@@ -4800,10 +4803,10 @@ async function doSyncOpenCode(enabled, { startIds = null } = {}) {
   let changed = 0;
   for (const p of PROVIDERS) {
     // 网关是叠加层：它自己的 provider 由 `router gateway install` 显式写入，
-    // 不跟着开关自动增删——否则 `on gateway` 会顺手把十家的 provider 全删掉。
+    // 不跟着开关自动增删——否则 `on gateway` 会顺手把十二家的 provider 全删掉。
     if (p.gateway) continue;
-    // 只接积分的来源（WPS 灵犀）没有模型目录，写进 opencode 只会得到一个
-    // 选中就报错的假 provider。它的余额由 credits 插件直接读反代。
+    // 只接积分的来源（creditsOnly，当前没有）没有模型目录，写进 opencode 只会
+    // 得到一个选中就报错的假 provider。它的余额由 credits 插件直接读反代。
     if (p.creditsOnly) continue;
     const want = enabled.includes(p.id);
     const present = ocHasProvider(p.ocProvider);
@@ -4955,8 +4958,8 @@ async function cmdList({ json = false } = {}) {
   }
 
   // 用户自己在 .jsonc 里配的不算漂移——我们无权改，也不该一直提示。
-  // 只接积分的来源（WPS 灵犀）本来就不写 opencode provider，r.oc 恒为 false，
-  // 一样要排除，否则每次 list 都会报一条假的「开关与 opencode 不一致」。
+  // 只接积分的来源（creditsOnly，当前没有）本来就不写 opencode provider，
+  // r.oc 恒为 false，一样要排除，否则每次 list 都会报一条假的「开关与 opencode 不一致」。
   const ocDrift = rows.filter(
     (r) =>
       r.on !== r.oc &&
@@ -5647,8 +5650,8 @@ async function cmdGateway(raw) {
     }
     for (const p of PROVIDERS) {
       if (p.gateway) continue;
-      // 只接积分的来源（WPS 灵犀）没有对话端点，网关本来就不该转发到它：
-      // 这是有意例外，不是端口表漂移。打印一句说明，但不计入 drift。
+      // 只接积分的来源（creditsOnly，当前没有）没有对话端点，网关本来就不该
+      // 转发到它：这是有意例外，不是端口表漂移。打印一句说明，但不计入 drift。
       if (p.creditsOnly) {
         say(`${C.dim}· ${p.id} 只接积分，不进网关（预期）${C.reset}`);
         continue;
@@ -5754,10 +5757,10 @@ async function cmdDoctor() {
     if (p.kind === 'lingxi') {
       checks.push(
         lingxiInstalled()
-          ? `${C.ok} 桌面端已安装（仅积分；登录态由反代读 cookie 库）`
+          ? `${C.ok} 桌面端已安装（登录态由反代读 cookie 库）`
           : `${C.warn} 未安装 WPS 灵犀桌面端`,
       );
-      checks.push(`${C.dim}只接积分，不写 opencode/pi 模型 provider${C.reset}`);
+      checks.push(`${C.dim}对话可用（agent 形态，不吐 tool_calls）${C.reset}`);
     }
     // 本机限额：这一家的并发/速率闸门，避免「以为在限流其实没生效」
     // 网关是叠加层（不直连上游），限额对它的「免费供应商」分支才有意义

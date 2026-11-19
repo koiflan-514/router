@@ -1,6 +1,6 @@
 # 统一网关运维
 
-网关是 `router.mjs` 的一个子命令族，不是第十一家反代。它把十家的端口拼成一个，
+网关是 `router.mjs` 的一个子命令族，不是第十三家反代。它把十二家的端口拼成一个，
 所以它的运维语义要单独说清——尤其是「为什么它不跟着 `on/off` 走」。
 
 ## 启停
@@ -44,7 +44,7 @@ pi、不想动 opencode，用 `node scripts/pi-models.mjs gateway`。
 
 - 它没有「关掉」以外的状态——开着才有用；
 - 它的 opencode provider（`router-gateway`）是**可选**的，由 `gateway install` 显式写入，
-  不跟着开关自动增删。否则 `on gateway` 会顺手把十家的 provider 全删掉。
+  不跟着开关自动增删。否则 `on gateway` 会顺手把十二家的 provider 全删掉。
 
 所以：
 
@@ -127,7 +127,7 @@ schtasks /Create /TN router-gateway-quota /TR "node D:\router\router.mjs gateway
 
 | 现象 | 真因 | 修法 |
 |---|---|---|
-| 所有请求 502 | 十家都没起 | `node router.mjs up` |
+| 所有请求 502 | 十二家都没起 | `node router.mjs up` |
 | 单个模型 404 但直连能通 | 模型目录缓存过期 | `POST /v1/gateway/models/refresh` |
 | 404 且提示「该模型在：xxx」 | 写错了供应商前缀 | 按提示改前缀 |
 | 429「约 N 秒后恢复」 | 该家额度/限流冷却中 | 等，或 `gateway status` 看是哪家 |

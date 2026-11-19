@@ -6,7 +6,7 @@
  * 那两个入口。三处共用 `scripts/lib/pi-sync.mjs` 落盘（写前备份、内容没变就不写）。
  *
  * 覆盖三层：
- *   1. 本机七家反代（trae-local / codearts / zcode / loomy / raccoon / qwenwork / dumate）
+ *   1. 本机八家反代（trae-local / codearts / zcode / loomy / raccoon / qwenwork / dumate / lingxi）
  *      从各自 `/v1/models` 拉实时清单，连同鉴权 key 与 compat 一起写；
  *   2. `router-gateway`：一个 baseURL（:8785），模型名 `<供应商>/<模型>` + combo 虚拟模型；
  *   3. 免费供应商（18 家里有 key / 本机免账号的那些）：每家一个直连 provider。
@@ -24,7 +24,7 @@
  *   `workbuddy` / `workbuddy-global` → 扩展 workbuddy.ts。
  *     反代的 /v1/models 是包作者猜的静态表，服务端会回 11102 service info not
  *     found；扩展读的是桌面端落盘的产品配置，那份才是真实可用集。
- * 剩下 `trae-local`、`codearts`、`zcode`、`loomy`、`raccoon`、`qwenwork`、`dumate` 没有扩展，
+ * 剩下 `trae-local`、`codearts`、`zcode`、`loomy`、`raccoon`、`qwenwork`、`dumate`、`lingxi` 没有扩展，
  * 才走本脚本。
  *
  * 只读各家的 `/v1/models`，只写 pi 的 models.json（写前备份到 models.backups/）。
@@ -180,6 +180,14 @@ function sources() {
       apiKey: 'dumate-local',
       map: mapDumate,
     },
+    {
+      id: 'lingxi',
+      port: 8796,
+      name: 'WPS 灵犀',
+      // 反代不校验入站 key，但 pi 的 OpenAI 兼容层要求非空
+      apiKey: 'lingxi-local',
+      map: mapLingxi,
+    },
   ];
 }
 
@@ -300,6 +308,25 @@ function mapRaccoon(raw) {
   });
 }
 
+/**
+ * WPS 灵犀的 /v1/models 是 OpenAI 形状加扩展字段：
+ * context_window / max_output_tokens / capabilities{vision,reasoning,tool_call}。
+ * 注意：灵犀是完整 agent，不吐 OpenAI tool_calls（tool_call:false）。pi 的
+ * models.json schema 没有工具能力位，这里只写标准字段；拿它当对话模型用，
+ * 不要选它驱动编码 agent（见 integrations/lingxi2api/README.md）。
+ */
+function mapLingxi(raw) {
+  const caps = raw.capabilities || {};
+  const input = ['text'];
+  if (caps.vision === true) input.push('image');
+  return modelEntry(raw.id, raw.name || raw.id, {
+    input,
+    reasoning: caps.reasoning === true ? true : undefined,
+    contextWindow: POSITIVE(raw.context_window),
+    maxTokens: POSITIVE(raw.max_output_tokens),
+  });
+}
+
 async function fetchModels(src, timeout = 8000) {
   const headers = src.apiKey ? { Authorization: `Bearer ${src.apiKey}` } : {};
   try {
@@ -402,7 +429,7 @@ async function main() {
     const combos = await gatewayCombos();
     const provider = await gatewayPiProvider({ combos });
     if (!provider.models.length) {
-      failed.push({ src: { name: '统一网关', id: 'router-gateway' }, error: '十家与免费供应商都没在跑' });
+      failed.push({ src: { name: '统一网关', id: 'router-gateway' }, error: '十二家与免费供应商都没在跑' });
     } else {
       providers.push(provider);
       const note = combos.length ? `，含 ${combos.length} 条 combo` : '';

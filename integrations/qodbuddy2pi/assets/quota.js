@@ -893,9 +893,9 @@ async function dumateCredits() {
  * WPS 灵犀的「智点」余额在本仓库自写的反代 lingxi-proxy 里（:8796）：
  *   GET /v1/quota → balance { remaining, total, used } + wallet + buckets[]
  *
- * **这家只接积分，不接对话**：上游没有可直达的 OpenAI 兼容入口
- * （agent-runtime/chat/completions 对任何 body 都回 400，也没有模型清单接口），
- * 所以反代刻意不提供 /v1/models，router 里也不占模型 provider 位。
+ * 这家既有积分也有对话：反代自己 spawn lingxi.exe app-server（JSON-RPC stdio），
+ * 提供 /v1/models 与 /v1/chat/completions。注意灵犀是完整 agent，不吐 OpenAI
+ * tool_calls，适合对话、不适合当编码 agent 驱动（见 lingxi2api/README.md）。
  *
  * 与 Loomy/小浣熊不同，这家有真实发放总量，能画进度条。智点在桌面端做任务领取。
  */
@@ -942,7 +942,7 @@ async function lingxiCredits() {
     .filter((t) => Number.isFinite(t))
     .sort((a, b) => a - b)[0];
 
-  const detail = ['仅积分查询（上游无 OpenAI 兼容对话入口）'];
+  const detail = ['对话可用（agent 形态，不支持工具调用驱动）'];
   if (Number(wallet.bonus) > 0) detail.push(`赠送 ${wallet.bonus}`);
   if (Number(wallet.purchased) > 0) detail.push(`购买 ${wallet.purchased}`);
   if (packs.length > 1) detail.push(`${packs.length} 个智点包`);

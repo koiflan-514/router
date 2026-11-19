@@ -55,6 +55,10 @@ export const DESCRIPTORS = [
   { id: 'qwenwork', port: 8794, dialect: 'both', key: 'qwenwork-local' },
   // 百度搭子：本机反代自动发现 DuMate main-server 的随机端口，对外只有 OpenAI 方言。
   { id: 'dumate', port: 8795, dialect: 'openai', key: 'dumate-local' },
+  // WPS 灵犀：反代自己 spawn lingxi.exe app-server（JSON-RPC stdio），对外只有
+  // OpenAI 方言。灵犀是完整 agent，不吐 tool_calls——网关转发 tools 时它只会
+  // 返回文本，适合对话不适合编码驱动（见 integrations/lingxi2api/README.md）。
+  { id: 'lingxi', port: 8796, dialect: 'openai', key: 'lingxi-local' },
 ];
 
 export const BY_ID = new Map(DESCRIPTORS.map((d) => [d.id, d]));
@@ -122,7 +126,7 @@ export function enabledIds() {
       const known = new Set(all);
       // 开关里可能混着 `gateway` 自己（它不是上游），剔掉再判断
       const picked = s.enabled.filter((id) => known.has(id));
-      // `on gateway` 会把开关收成只剩网关自己；那种情况下按「十家全开」处理，
+      // `on gateway` 会把开关收成只剩网关自己；那种情况下按「十二家全开」处理，
       // 否则网关一个上游都没有、只能返回 502，看起来像网关坏了。
       return picked.length ? picked : all;
     }
@@ -344,7 +348,7 @@ export async function providersServing(model, { ids = enabledIds(), force = fals
 /**
  * 免费供应商（云端 API-Key 直连 + 本机免账号）的接入。
  *
- * 它们和本机 9 家反代在调度器眼里**是同一种东西**（一个可选的 upstream），
+ * 它们和本机各家反代在调度器眼里**是同一种东西**（一个可选的 upstream），
  * 差别只在「怎么发请求」：本机走 127.0.0.1 的固定端口，免费供应商走云端 HTTPS
  * 且要带真 key。所以这里只提供三样东西给上层：
  *
@@ -360,7 +364,7 @@ export async function freeEnabledIds() {
     .filter((r) => r.ok)
     .map((r) => r.def.id);
 }
-/** 全部上游 id：本机 9 家（受 router.json 开关约束）+ 可用的免费供应商。 */
+/** 全部上游 id：本机各家反代（受 router.json 开关约束）+ 可用的免费供应商。 */
 export async function allUpstreamIds() {
   return [...enabledIds(), ...(await freeEnabledIds())];
 }
@@ -386,7 +390,7 @@ export function knownAny(id) {
 /**
  * 某个模型在哪些上游上存在 —— 不分来源。
  *
- * 与本文件的 `providersServing` 的区别：那个只看本机 9 家，这个把免费供应商也算进来。
+ * 与本文件的 `providersServing` 的区别：那个只看本机反代，这个把免费供应商也算进来。
  * 裸模型名的自动选家必须用这个，否则「只在 OpenRouter 上的免费模型」永远找不到。
  */
 export async function servingAny(model, { ids = null, force = false } = {}) {

@@ -1,33 +1,30 @@
 #!/usr/bin/env node
 /**
- * lingxi-proxy.js — 把 WPS 灵犀桌面端的「智点」额度暴露成本机只读接口。
+ * lingxi-proxy.js — 把 WPS 灵犀桌面端的订阅额度转成 OpenAI 兼容端点。
  *
- * **这家目前只接积分，不接对话。** 原因写在 README 里，简述：
- * 灵犀是 Electron + Go app-server（JSON-RPC over stdio）的 agent 形态，
- * 上游没有可直达的 OpenAI 兼容面——`/api/public/v1/agent-runtime/chat/completions`
- * 挂在工具端点那一组下面，对任何 body（连空 `{}`）都回同一个 400 InvalidArgument；
- * 也没有模型清单接口。所以这里刻意**不提供** /v1/models 与 /v1/chat/completions，
- * 免得在 opencode/pi 里列出一个选中就报错的假 provider。
+ * 灵犀是 Electron 外壳 + Go app-server（JSON-RPC over stdio）的 agent 形态。
+ * 本反代自己 spawn 一个 app-server，用桌面端的 wps_sid 鉴权，把 OpenAI 的
+ * /v1/models 与 /v1/chat/completions 翻译成它的原生 JSON-RPC：
  *
- * 凭据链条（这是这家唯一特殊的地方）：
- *   %APPDATA%/WPS 灵犀/Local State → os_crypt.encrypted_key（DPAPI 保护）
- *     └─ DPAPI Unprotect（当前用户）→ 32 字节主密钥
- *          └─ AES-256-GCM 解 Partitions/lingxi-passport-v2-<hash>/Network/Cookies
- *               的 cookies.encrypted_value（"v10" + nonce + 密文 + tag，
- *               明文前还有 32 字节 SHA256(host) 前缀）
- *                 └─ wps_sid（.wps.cn 域，50 字符）
+ *   initialize  →  session/start  →  run/start  →  收集 SSE 事件  →  OpenAI 响应
  *
- * 注意 SID **不在** app-server-data/auth.json 里：那份是 `auth_storage=runtime`，
- * 落盘的 wps_sid.value 是空串。真正的登录态在 Electron 的 cookie jar。
- * auth-binding-key.v1 只用于快照的 HMAC 绑定，不是快照密钥，别拿它去解 auth-snapshot.json。
+ * 同时保留只读积分端点（credits 插件用）。
  *
- * 端点（全部只读）：
- *   GET /health        进程、凭据状态、账号（不输出 SID）
- *   GET /v1/quota      智点余额 + 分项 + 每包到期（opencode provider-credits 插件用）
- *   GET /v1/credits    同上（别名）
- *   GET /v1/usage      智点收支明细（赠送/消费，带任务名与 session_id）
+ * 凭据链条：
+ *   %APPDATA%/WPS 灵犀/Local State → os_crypt.encrypted_key（DPAPI）
+ *     └─ AES-256-GCM 解 Partitions/lingxi-passport-v2-<hash>/Network/Cookies 的 wps_sid
+ * 注意 SID 不在 app-server-data/auth.json（那份是 runtime，落盘为空），
+ * auth-binding-key.v1 只用于认证快照的 HMAC 绑定，不是快照密钥。
  *
- * 零依赖，只用 node: 内建模块（含 node:sqlite 读 cookie 库）；不写任何凭证文件。
+ * 端点：
+ *   GET  /health              进程、上游、登录态、模型数
+ *   GET  /v1/models           OpenAI 模型清单（来自 app-server 的 model/list）
+ *   POST /v1/chat/completions 对话；支持流式与非流式、多轮 messages
+ *   GET  /v1/quota            智点余额 + 积分包（opencode credits 插件用）
+ *   GET  /v1/credits          同上（别名）
+ *   GET  /v1/usage            智点收支明细
+ *
+ * 零依赖，只用 node: 内建模块；不写任何凭证文件。
  *
  * 用法：
  *   node lingxi-proxy.js                  # 127.0.0.1:8796
@@ -42,7 +39,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 const WIN = process.platform === 'win32';
 const HOME = os.homedir();
@@ -51,9 +48,11 @@ const STARTED_AT = Date.now();
 const DEFAULT_PORT = 8796;
 const UPSTREAM = String(process.env.LINGXI_UPSTREAM || 'https://lingxi.wps.cn').replace(/\/+$/, '');
 const TIMEOUT_MS = Number(process.env.LINGXI_TIMEOUT_MS || 15_000);
-// cookie 库会被桌面端持续写入；每次请求都解密太贵（DPAPI 要起 PowerShell），缓存一会儿。
 const SID_CACHE_MS = Number(process.env.LINGXI_SID_CACHE_MS || 120_000);
 const QUOTA_CACHE_MS = Number(process.env.LINGXI_QUOTA_CACHE_MS || 30_000);
+const CHAT_TIMEOUT_MS = Number(process.env.LINGXI_CHAT_TIMEOUT_MS || 180_000);
+const DEVICE_ID = String(process.env.LINGXI_DEVICE_ID || '').trim()
+  || '87722910d967ed51e44f45ea22844b9dc745c4e85fce4f9792bd61b74d692b61';
 
 function argValue(name) {
   const i = process.argv.indexOf(name);
@@ -63,7 +62,6 @@ function argValue(name) {
 const PORT = Number(argValue('--port') || process.env.LINGXI_PORT || process.env.PORT || DEFAULT_PORT);
 const HOST = String(process.env.LINGXI_HOST || '127.0.0.1');
 
-/** 桌面端的 Electron userData 目录。 */
 function appDataRoot() {
   const explicit = String(process.env.LINGXI_APP_DATA || '').trim();
   if (explicit) return explicit;
@@ -75,6 +73,10 @@ function appDataRoot() {
 }
 
 const APP_DATA = appDataRoot();
+const APP_SERVER_EXE = String(process.env.LINGXI_APP_SERVER || '')
+  || path.join(APP_DATA, 'app_server_link', 'service', 'lingxi.exe');
+const APP_SERVER_CONFIG = path.join(APP_DATA, 'app-server-data', 'config.json');
+const APP_SERVER_DATA = path.join(APP_DATA, 'app-server-data', 'state');
 
 // ---------------------------------------------------------------- 小工具
 
@@ -113,7 +115,6 @@ function numberOrZero(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** 上游给的是 797.0 这种浮点，展示时收成两位小数。 */
 function round2(value) {
   return Math.round(numberOrZero(value) * 100) / 100;
 }
@@ -122,7 +123,6 @@ function round2(value) {
 
 const sidCache = { sid: '', at: 0, source: '', error: '' };
 
-/** Windows：DPAPI 解 Local State 里的 Chromium 主密钥。 */
 function windowsMasterKey() {
   const state = readJson(path.join(APP_DATA, 'Local State'));
   const b64 = state && state.os_crypt && state.os_crypt.encrypted_key;
@@ -136,19 +136,13 @@ function windowsMasterKey() {
     '[Convert]::ToBase64String($p)',
   ].join('; ');
   const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    encoding: 'utf8',
-    timeout: 20_000,
-    windowsHide: true,
+    encoding: 'utf8', timeout: 20_000, windowsHide: true,
   });
   if (r.status !== 0) return null;
   const key = Buffer.from(String(r.stdout || '').trim(), 'base64');
   return key.length === 32 ? key : null;
 }
 
-/**
- * Chromium cookie 的 encrypted_value：`v10`/`v11` + 12 字节 nonce + 密文 + 16 字节 tag。
- * 新版 Chromium 在明文前加了 32 字节 SHA256(host) 前缀，要去掉才是真值。
- */
 function decryptCookie(buf, key) {
   if (!buf || !buf.length || !key) return '';
   const prefix = buf.subarray(0, 3).toString('latin1');
@@ -164,7 +158,6 @@ function decryptCookie(buf, key) {
   }
 }
 
-/** 递归找出所有 cookie 库；passport 分区优先（SID 就在那儿）。 */
 function cookieDatabases() {
   const out = [];
   const walk = (dir, depth) => {
@@ -182,21 +175,10 @@ function cookieDatabases() {
     }
   };
   walk(APP_DATA, 0);
-  // passport 分区是登录态所在；其余分区（business / in-app-browser）作兜底
-  out.sort((a, b) => {
-    const pa = /passport/i.test(a) ? 0 : 1;
-    const pb = /passport/i.test(b) ? 0 : 1;
-    return pa - pb;
-  });
+  out.sort((a, b) => (/passport/i.test(a) ? 0 : 1) - (/passport/i.test(b) ? 0 : 1));
   return out;
 }
 
-/**
- * 从 cookie 库里取 wps_sid。
- *
- * 桌面端在跑时库是锁着的，所以先复制到临时目录再只读打开——直接开会撞 SQLITE_BUSY。
- * expires_utc 是 WebKit 时间戳（微秒，1601 起算），超出 JS 安全整数，必须 CAST 成 TEXT。
- */
 function sidFromCookies() {
   let DatabaseSync;
   try {
@@ -206,10 +188,8 @@ function sidFromCookies() {
   }
   const key = windowsMasterKey();
   if (!key) return { error: `读不到 DPAPI 主密钥（${path.join(APP_DATA, 'Local State')}）` };
-
   const dbs = cookieDatabases();
   if (!dbs.length) return { error: `找不到 cookie 库：${APP_DATA}` };
-
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lingxi-'));
   try {
     for (const db of dbs) {
@@ -223,16 +203,14 @@ function sidFromCookies() {
       try {
         conn = new DatabaseSync(copy, { readOnly: true });
         const rows = conn
-          .prepare("SELECT host_key, encrypted_value, CAST(expires_utc AS TEXT) AS exp FROM cookies WHERE name = 'wps_sid'")
+          .prepare("SELECT host_key, encrypted_value FROM cookies WHERE name = 'wps_sid'")
           .all();
         for (const row of rows) {
           const sid = decryptCookie(Buffer.from(row.encrypted_value), key);
-          if (sid) {
-            return { sid, source: path.relative(APP_DATA, db), host: row.host_key };
-          }
+          if (sid) return { sid, source: path.relative(APP_DATA, db) };
         }
       } catch {
-        // 这个分区没有 SID 或库损坏，换下一个
+        // 换下一个分区
       } finally {
         try {
           if (conn) conn.close();
@@ -247,7 +225,6 @@ function sidFromCookies() {
   }
 }
 
-/** 取 SID：环境变量优先，其次 cookie 库（带缓存）。 */
 function readSid({ force = false } = {}) {
   const explicit = String(process.env.LINGXI_WPS_SID || '').trim();
   if (explicit) return { sid: explicit, source: 'env' };
@@ -263,20 +240,17 @@ function readSid({ force = false } = {}) {
     return { sid: got.sid, source: got.source };
   }
   sidCache.error = got.error || '取不到 wps_sid';
-  // 读不到时退回上一次的好值：桌面端正在写库导致的瞬时失败不该让接口立刻瘫掉。
-  // 真是重新登录换了 SID，上游会回 401，调用方会 force 重读再试一次。
   if (sidCache.sid) return { sid: sidCache.sid, source: sidCache.source, stale: true };
   return { error: sidCache.error };
 }
 
-// ---------------------------------------------------------------- 上游
+// ---------------------------------------------------------------- 上游 HTTP（积分）
 
 async function upstreamGet(apiPath, { force = false } = {}) {
   let auth = readSid({ force });
   if (!auth.sid) {
     return Object.assign(new Error(auth.error || '取不到 WPS 灵犀登录态'), { code: 'LINGXI_NO_AUTH' });
   }
-
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let res;
     try {
@@ -284,7 +258,6 @@ async function upstreamGet(apiPath, { force = false } = {}) {
         headers: {
           Cookie: `wps_sid=${auth.sid}`,
           Accept: 'application/json',
-          // 上游按客户端通道下发配置，UA 带上桌面端标识
           'User-Agent': 'lingxi-desktop/1.3.41',
         },
         signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -297,30 +270,465 @@ async function upstreamGet(apiPath, { force = false } = {}) {
     try {
       payload = JSON.parse(text);
     } catch {}
-
     if (res.status === 401 || res.status === 403) {
-      // SID 轮换了：强制重读 cookie 库再试一次
       auth = readSid({ force: true });
       if (auth.sid && attempt === 0) continue;
       return Object.assign(new Error('WPS 灵犀登录态失效（打开桌面端重新登录）'), { code: 'LINGXI_AUTH' });
     }
     if (!res.ok || !payload || payload.result !== 'ok') {
       const message = (payload && (payload.msg || payload.hint)) || text.slice(0, 200) || `HTTP ${res.status}`;
-      return Object.assign(new Error(`WPS 灵犀接口返回：${message}`), { code: 'LINGXI_UPSTREAM', status: res.status });
+      return Object.assign(new Error(`WPS 灵犀接口返回：${message}`), { code: 'LINGXI_UPSTREAM' });
     }
     return { data: payload.data || {}, fetchedAt: new Date().toISOString() };
   }
-  return Object.assign(new Error('WPS 灵犀登录态失效（打开桌面端重新登录）'), { code: 'LINGXI_AUTH' });
+  return Object.assign(new Error('WPS 灵犀登录态失效'), { code: 'LINGXI_AUTH' });
 }
 
 function statusFor(err) {
   if (err.code === 'LINGXI_NO_AUTH') return 501;
   if (err.code === 'LINGXI_AUTH') return 401;
-  if (err.code === 'LINGXI_NETWORK') return 502;
   return 502;
 }
 
-// ---------------------------------------------------------------- 账号
+// ---------------------------------------------------------------- AppServer 客户端（stdio JSON-RPC）
+
+/**
+ * 管理与一个常驻 lingxi.exe app-server 的 stdio JSON-RPC 会话。
+ *
+ * 关键协议点（逆向所得，见 README）：
+ *  - 必须 spawn 时带 LINGXI_WPS_SID 环境变量（runtime 鉴权）
+ *  - initialize params 用 snake_case：{protocol_version, device_id, client_type}
+ *  - 握手后要发 `initialized` 通知，否则后续方法都回 -32600
+ *  - 方法名用斜杠：session/start、run/start、model/list、account/status
+ *  - run/start 参数：{session_id, model:{provider,model_name}, agent_input:{text,files}}
+ *  - 回复文本在 component.content 事件的 delta / component.end 的 full_content
+ *
+ * 并发控制：所有 RPC 串行（mutex）——与桌面端单窗口语义一致，也避免 stdout
+ * 多路复用的竞态。对话请求排队执行。
+ */
+class AppServer {
+  constructor() {
+    this.child = null;
+    this.buffer = '';
+    this.pending = new Map();
+    this.eventHandlers = new Set();
+    this.nextId = 1;
+    this.ready = false;
+    this.readyPromise = null;
+    this.queue = Promise.resolve();
+    this.sidUsed = '';
+    this.lastError = '';
+  }
+
+  /** 确保进程在跑且已完成握手；SID 变了就重建。 */
+  ensure() {
+    if (this.readyPromise) return this.readyPromise;
+    this.readyPromise = this._start().catch((err) => {
+      this.lastError = err.message;
+      this.readyPromise = null;
+      this.ready = false;
+      throw err;
+    });
+    return this.readyPromise;
+  }
+
+  async _start() {
+    const auth = readSid();
+    if (!auth.sid) throw new Error(auth.error || '未登录 WPS 灵犀');
+    if (!fs.existsSync(APP_SERVER_EXE)) throw new Error(`找不到 app-server：${APP_SERVER_EXE}`);
+
+    this._stopChild();
+    this.sidUsed = auth.sid;
+    this.nextId = 1;
+    this.pending.clear();
+
+    this.child = spawn(APP_SERVER_EXE, [
+      '--stdin', '--auth-storage=runtime',
+      '--config', APP_SERVER_CONFIG,
+      '--data-dir', APP_SERVER_DATA,
+    ], {
+      env: { ...process.env, LINGXI_WPS_SID: auth.sid },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+
+    this.child.stdout.on('data', (chunk) => this._onData(chunk));
+    this.child.stderr.on('data', (chunk) => {
+      const s = chunk.toString();
+      // app-server 会往 stderr 打 broker 信息，忽略噪音，只留真正的错误
+      if (/error|failed/i.test(s)) log('[app-server]', s.trim().slice(0, 200));
+    });
+    this.child.on('exit', (code) => {
+      this.ready = false;
+      this.readyPromise = null;
+      if (this.child) log(`app-server 退出（code=${code}）`);
+      this.child = null;
+      // 让等待中的请求尽快失败
+      for (const [, p] of this.pending) p.reject(new Error('app-server 已退出'));
+      this.pending.clear();
+    });
+    this.child.on('error', (err) => {
+      this.lastError = err.message;
+      log('app-server 启动失败:', err.message);
+    });
+
+    const init = await this._requestRaw('initialize', {
+      protocol_version: '2026-08-13',
+      device_id: DEVICE_ID,
+      client_type: 'lingxi_claw',
+    }, 15000);
+    this.notify('initialized', {});
+    this.ready = true;
+    log(`app-server 就绪：v${init.server_info && init.server_info.version}，模型 ${(init.capabilities && init.capabilities.supported_api_formats || []).join('/')}`);
+    return init;
+  }
+
+  _onData(chunk) {
+    this.buffer += chunk.toString();
+    let nl;
+    while ((nl = this.buffer.indexOf('\n')) >= 0) {
+      const line = this.buffer.slice(0, nl).trim();
+      this.buffer = this.buffer.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg.id != null && this.pending.has(msg.id)) {
+        const p = this.pending.get(msg.id);
+        this.pending.delete(msg.id);
+        clearTimeout(p.timer);
+        if (msg.error) p.reject(this._rpcError(msg.error));
+        else p.resolve(msg.result);
+      } else if (msg.method) {
+        for (const h of this.eventHandlers) {
+          try {
+            h(msg);
+          } catch {}
+        }
+      }
+    }
+  }
+
+  _rpcError(error) {
+    const data = error.data || {};
+    const err = new Error(data.hint || data.msg || error.message || 'app-server 错误');
+    err.code = error.code;
+    err.result = data.result;
+    err.v7code = data.v7code;
+    return err;
+  }
+
+  request(method, params, timeout = CHAT_TIMEOUT_MS, onEvent = null) {
+    // 串行执行：会话/运行都是单窗口语义，且简化事件归属
+    const run = () => this._requestNow(method, params, timeout, onEvent);
+    const result = this.queue.then(run, run);
+    this.queue = result.catch(() => {});
+    return result;
+  }
+
+  async _requestNow(method, params, timeout, onEvent) {
+    await this.ensure();
+    return this._requestRaw(method, params, timeout, onEvent);
+  }
+
+  /** 直接发一帧并等响应，不经过 ensure / 队列（握手阶段用，避免重入死锁）。 */
+  _requestRaw(method, params, timeout, onEvent) {
+    if (onEvent) this.eventHandlers.add(onEvent);
+    const id = `desktop_${this.nextId++}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        if (onEvent) this.eventHandlers.delete(onEvent);
+        reject(new Error(`${method} 超时`));
+      }, timeout);
+      this.pending.set(id, { resolve, reject, timer, onEvent });
+      try {
+        this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+      } catch (err) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        if (onEvent) this.eventHandlers.delete(onEvent);
+        reject(err);
+      }
+    }).finally(() => {
+      if (onEvent) this.eventHandlers.delete(onEvent);
+    });
+  }
+
+  notify(method, params) {
+    if (this.child && this.child.stdin.writable) {
+      this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`);
+    }
+  }
+
+  _stopChild() {
+    if (this.child) {
+      try {
+        this.child.kill();
+      } catch {}
+      this.child = null;
+    }
+    this.ready = false;
+  }
+}
+
+const appServer = new AppServer();
+
+// ---------------------------------------------------------------- 模型目录
+
+const MODEL_CACHE_MS = 5 * 60 * 1000;
+let modelCache = { models: null, at: 0 };
+
+/** OpenAI /v1/models 形状的清单，来自 app-server 的 model/list。 */
+async function listModels({ refresh = false } = {}) {
+  if (!refresh && modelCache.models && Date.now() - modelCache.at < MODEL_CACHE_MS) {
+    return modelCache.models;
+  }
+  await appServer.ensure();
+  const raw = await appServer.request('model/list', {});
+  const created = Math.floor(Date.now() / 1000);
+  const models = (Array.isArray(raw.models) ? raw.models : []).map((m) => ({
+    id: m.model_name,
+    object: 'model',
+    created,
+    owned_by: m.provider || 'lingxi',
+    name: m.name || m.model_name,
+    description: m.intro || m.desc || '',
+    context_window: m.max_context_tokens || null,
+    max_output_tokens: m.max_new_tokens || null,
+    capabilities: {
+      // 上游 support_multimodal=true，但本桥只把 messages 压成 text（files:[]），
+      // 图片会被丢弃——如实标 false，免得客户端贴图后静默失效
+      vision: false,
+      reasoning: Array.isArray(m.reasoning_efforts) && m.reasoning_efforts.length > 0,
+      // 灵犀是完整 agent，不吐 OpenAI tool_calls；标 false 让客户端别拿它当编码驱动
+      tool_call: false,
+    },
+  }));
+  if (!models.length) throw new Error('app-server 没有返回模型');
+  modelCache = { models, at: Date.now() };
+  return models;
+}
+
+function resolveModel(modelId, models) {
+  if (!modelId) return models[0] && models[0].id;
+  const hit = models.find((m) => m.id === modelId || m.id.toLowerCase() === String(modelId).toLowerCase());
+  return hit ? hit.id : null;
+}
+
+// ---------------------------------------------------------------- 对话
+
+/** 把 OpenAI messages 压成灵犀 agent_input.text（保留角色，多轮用换行分隔）。 */
+function messagesToText(messages) {
+  if (!Array.isArray(messages) || !messages.length) return '';
+  return messages
+    .map((m) => {
+      const role = String(m.role || 'user');
+      let content = m.content;
+      if (Array.isArray(content)) {
+        content = content
+          .filter((part) => part && (part.type === 'text' || typeof part.text === 'string'))
+          .map((part) => part.text || '')
+          .join('\n');
+      }
+      content = String(content == null ? '' : content);
+      if (role === 'system') return `[系统指令]\n${content}`;
+      if (role === 'assistant') return `[助手]\n${content}`;
+      if (role === 'tool') return `[工具结果]\n${content}`;
+      return content;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function parseStream(body) {
+  if (!body || !body.length) return false;
+  try {
+    return JSON.parse(body.toString('utf8')).stream === true;
+  } catch {
+    return false;
+  }
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > 64 * 1024 * 1024) {
+        reject(new Error('请求体过大'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * 执行一次 chat。onDelta(text) 在流式时逐段回调；非流式传 null。
+ * 返回 { text, usage, runId }。
+ */
+async function runChat({ model, messages, reasoningEffort, onDelta }) {
+  const models = await listModels();
+  const resolved = resolveModel(model, models);
+  if (!resolved) {
+    const err = new Error(`未知模型 ${model}（可用：${models.slice(0, 8).map((m) => m.id).join(', ')}…）`);
+    err.status = 400;
+    throw err;
+  }
+  const text = messagesToText(messages);
+  if (!text.trim()) {
+    const err = new Error('messages 为空');
+    err.status = 400;
+    throw err;
+  }
+
+  // 每次请求新建会话：干净上下文，也避免并发串台
+  const session = await appServer.request('session/start', {
+    session_type: 'cowork_client',
+    agent: 'lingxiclaw',
+    client_type: 'lingxi_claw',
+  });
+  const sessionId = session.session_id;
+
+  let fullText = '';
+  let finish = false;
+  let usage = null;
+  let runError = null;
+
+  const onEvent = (msg) => {
+    const p = msg.params || {};
+    if (p.session_id && p.session_id !== sessionId) return;
+    if (msg.method === 'component.content' && p.type === 'c_text') {
+      const delta = String(p.delta || '');
+      if (delta) {
+        fullText += delta;
+        if (onDelta) onDelta(delta);
+      }
+    } else if (msg.method === 'component.end' && p.type === 'c_text') {
+      // full_content 是这一段的完整文本；若没有收到过 delta，用它兜底
+      if (!fullText && p.full_content) {
+        fullText = String(p.full_content);
+        if (onDelta) onDelta(fullText);
+      }
+    } else if (msg.method === 'token_usage.updated' && p.usage) {
+      usage = p.usage;
+    } else if (msg.method === 'error') {
+      runError = new Error((p.details && p.details.hint) || p.message || 'run 失败');
+      finish = true;
+    } else if (msg.method === 'stream.end' || msg.method === 'run.end') {
+      finish = true;
+    }
+  };
+
+  // 事件 handler 的生命周期要覆盖整个 run（响应返回后事件还在继续），
+  // 所以这里自己注册/注销，不用 request 的 onEvent（那个在响应返回时就移除了）。
+  appServer.eventHandlers.add(onEvent);
+  try {
+    const agentInput = { text, files: [] };
+    if (reasoningEffort) agentInput.reasoning_effort = reasoningEffort;
+    const result = await appServer.request('run/start', {
+      session_id: sessionId,
+      model: { provider: 'lingxi', model_name: resolved },
+      agent_input: agentInput,
+    });
+
+    // run/start 返回后，事件流还在继续；等到 stream.end / run.end / error。
+    const deadline = Date.now() + CHAT_TIMEOUT_MS;
+    while (!finish && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    if (runError) throw runError;
+    if (!finish) throw new Error('对话超时（未收到结束事件）');
+    return { text: fullText, usage, runId: result.run_id || result.group_id || null, model: resolved };
+  } finally {
+    appServer.eventHandlers.delete(onEvent);
+  }
+}
+
+async function handleChat(req, res, url, body) {
+  let payload;
+  try {
+    payload = JSON.parse(body.toString('utf8'));
+  } catch {
+    return sendError(res, 400, '非法 JSON body');
+  }
+
+  const stream = parseStream(body);
+  const reasoningEffort =
+    payload.reasoning_effort
+    || (payload.chat_template_kwargs && payload.chat_template_kwargs.reasoning_effort)
+    || null;
+
+  if (stream) {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders && res.flushHeaders();
+    const id = `chatcmpl-${crypto.randomBytes(8).toString('hex')}`;
+    const created = Math.floor(Date.now() / 1000);
+    const model = payload.model || 'lingxi';
+    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    try {
+      const result = await runChat({
+        model,
+        messages: payload.messages,
+        reasoningEffort,
+        onDelta: (delta) => {
+          send({
+            id, object: 'chat.completion.chunk', created, model,
+            choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
+          });
+        },
+      });
+      const resultModel = result.model || model;
+      send({
+        id, object: 'chat.completion.chunk', created, model: resultModel,
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        ...(result.usage ? { usage: {
+          prompt_tokens: numberOrZero(result.usage.input_tokens),
+          completion_tokens: numberOrZero(result.usage.output_tokens),
+          total_tokens: numberOrZero(result.usage.total_tokens),
+        } } : {}),
+      });
+      res.write('data: [DONE]\n\n');
+    } catch (err) {
+      send({ error: { message: err.message, type: 'lingxi_chat_error', code: err.status || 502 } });
+      res.write('data: [DONE]\n\n');
+    }
+    res.end();
+    return;
+  }
+
+  // 非流式
+  try {
+    const result = await runChat({ model: payload.model, messages: payload.messages, reasoningEffort });
+    sendJson(res, 200, {
+      id: `chatcmpl-${crypto.randomBytes(8).toString('hex')}`,
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: result.model,
+      choices: [{ index: 0, message: { role: 'assistant', content: result.text }, finish_reason: 'stop' }],
+      ...(result.usage ? { usage: {
+        prompt_tokens: numberOrZero(result.usage.input_tokens),
+        completion_tokens: numberOrZero(result.usage.output_tokens),
+        total_tokens: numberOrZero(result.usage.total_tokens),
+      } } : {}),
+    });
+  } catch (err) {
+    sendError(res, err.status || 502, err.message, 'lingxi_chat_error');
+  }
+}
+
+// ---------------------------------------------------------------- 积分
 
 const profileCache = { data: null, at: 0 };
 
@@ -333,16 +741,11 @@ async function readProfile({ force = false } = {}) {
   return got.data;
 }
 
-// ---------------------------------------------------------------- 路由
-
 const quotaCache = { data: null, at: 0 };
 
-/** 积分包的人话标签：分账列窄，别把 sku_key 原样塞进去。 */
 function bucketLabel(item, kind) {
-  const sku = String(item.sku_key || '');
   if (kind === 'purchased') return '购买智点';
   if (kind === 'contract') return '套餐智点';
-  if (sku.includes('grant')) return '赠送智点';
   return '赠送智点';
 }
 
@@ -351,10 +754,8 @@ async function handleQuota(res, url) {
   if (!refresh && quotaCache.data && Date.now() - quotaCache.at < QUOTA_CACHE_MS) {
     return sendJson(res, 200, quotaCache.data);
   }
-
   const got = await upstreamGet('/api/public/v1/credits/balance', { force: refresh });
   if (got instanceof Error) return sendError(res, statusFor(got), got.message, 'lingxi_quota');
-
   const d = got.data;
   const profile = await readProfile({ force: refresh });
 
@@ -362,9 +763,6 @@ async function handleQuota(res, url) {
   const bonus = round2(d.total_bonus);
   const purchased = round2(d.total_purchased);
   const contract = round2(d.total_contract);
-  // 上游给的是「当前可用总额」与各来源分项，没有统一分母。
-  // 用 bonus_summary.total_value + purchased_summary.total_value 当发放总量：
-  // 它是真实读数（发放了多少），不是编出来的 100%。
   const grantedBonus = round2(d.bonus_summary && d.bonus_summary.total_value);
   const grantedPurchased = round2(d.purchased_summary && d.purchased_summary.total_value);
   const total = round2(grantedBonus + grantedPurchased);
@@ -374,65 +772,43 @@ async function handleQuota(res, url) {
   );
 
   const buckets = [];
-  for (const [kind, list] of [
-    ['bonus', d.bonus_credits],
-    ['purchased', d.purchased_credits],
-  ]) {
+  for (const [kind, list] of [['bonus', d.bonus_credits], ['purchased', d.purchased_credits]]) {
     for (const item of Array.isArray(list) ? list : []) {
       buckets.push({
-        kind,
-        label: bucketLabel(item, kind),
-        skuKey: item.sku_key || null,
-        total: round2(item.value),
-        used: round2(item.consumed),
-        remaining: round2(item.balance),
-        unit: 'credits',
-        effectAt: item.effect_time || null,
-        expireAt: item.expire_time || null,
+        kind, label: bucketLabel(item, kind), skuKey: item.sku_key || null,
+        total: round2(item.value), used: round2(item.consumed), remaining: round2(item.balance),
+        unit: 'credits', effectAt: item.effect_time || null, expireAt: item.expire_time || null,
       });
     }
   }
-  // 快到期的排前面：不用掉就浪费了
   buckets.sort((a, b) => String(a.expireAt || '9999').localeCompare(String(b.expireAt || '9999')));
-
   const sub = d.active_subscription || null;
+  const user = profile || {};
+
   const body = {
     ok: true,
     service: 'lingxi',
     fetchedAt: got.fetchedAt,
     user: {
-      id: profile && profile.id ? String(profile.id) : null,
-      name: profile && profile.name ? String(profile.name) : null,
-      corpId: profile && profile.corp_id ? String(profile.corp_id) : null,
-      isCorp: Boolean(profile && String(profile.corp_id || '0') !== '0'),
+      id: user.id ? String(user.id) : null,
+      name: user.name || null,
+      corpId: user.corp_id ? String(user.corp_id) : null,
+      isCorp: Boolean(user.corp_id && String(user.corp_id) !== '0'),
     },
-    // 有真实发放总量：客户端可以画进度条
     balance: { remaining, total, used: consumed, unit: 'credits' },
     wallet: {
-      available: remaining,
-      bonus,
-      purchased,
-      contract,
-      granted: total,
-      consumed,
+      available: remaining, bonus, purchased, contract, granted: total, consumed,
       enabled: d.enabled === true,
     },
-    subscription: sub
-      ? {
-          skuKey: sub.sku_key || null,
-          name: sub.merchandise_name || null,
-          expireAt: sub.expire_time || null,
-          planExpireAt: sub.plan_expire_time || null,
-        }
-      : null,
+    subscription: sub ? {
+      skuKey: sub.sku_key || null, name: sub.merchandise_name || null,
+      expireAt: sub.expire_time || null, planExpireAt: sub.plan_expire_time || null,
+    } : null,
     buckets,
-    // 灵犀没有公开逐模型倍率：返回空对象，显示端报「—」而不是编一个值。
     multipliers: {},
-    // 这家只接积分，不接对话（见文件头注释）
-    chatAvailable: false,
-    chatNote: 'WPS 灵犀上游没有可直达的 OpenAI 兼容对话入口，本反代只提供积分查询',
+    chatAvailable: true,
+    chatNote: '已接入 OpenAI 兼容对话（经 app-server JSON-RPC）',
   };
-
   quotaCache.data = body;
   quotaCache.at = Date.now();
   sendJson(res, 200, body);
@@ -442,7 +818,6 @@ async function handleUsage(res, url) {
   const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit')) || 20));
   const got = await upstreamGet('/api/public/v1/credits/transaction_summary');
   if (got instanceof Error) return sendError(res, statusFor(got), got.message, 'lingxi_usage');
-
   const list = Array.isArray(got.data.list) ? got.data.list : [];
   sendJson(res, 200, {
     ok: true,
@@ -450,15 +825,9 @@ async function handleUsage(res, url) {
     fetchedAt: got.fetchedAt,
     hasMore: got.data.has_more === true,
     transactions: list.slice(0, limit).map((t) => ({
-      type: t.type || null,
-      amount: round2(t.amount),
-      taskName: t.task_name || null,
-      remark: t.remark || null,
-      source: t.source || null,
-      sessionId: t.session_id || null,
-      skuKey: t.sku_key || null,
-      at: t.time || null,
-      expireAt: t.expire_time || null,
+      type: t.type || null, amount: round2(t.amount), taskName: t.task_name || null,
+      remark: t.remark || null, source: t.source || null, sessionId: t.session_id || null,
+      skuKey: t.sku_key || null, at: t.time || null, expireAt: t.expire_time || null,
     })),
   });
 }
@@ -466,22 +835,34 @@ async function handleUsage(res, url) {
 async function handleHealth(res) {
   const auth = readSid();
   const profile = auth.sid ? await readProfile() : null;
+  let models = [];
+  let modelError = '';
+  try {
+    models = await listModels();
+  } catch (err) {
+    modelError = err.message;
+  }
   sendJson(res, 200, {
     ok: true,
     service: 'lingxi-proxy',
-    mode: 'credits-only',
     upstream: UPSTREAM,
+    appServerReady: appServer.ready,
+    appServerError: appServer.lastError || undefined,
     loggedIn: Boolean(auth.sid),
     credentialSource: auth.source || null,
     credentialError: auth.error || undefined,
     sid: auth.sid ? maskSid(auth.sid) : null,
     user: profile ? { id: String(profile.id || ''), name: profile.name || null } : null,
+    models: models.length,
+    modelError: modelError || undefined,
     appData: APP_DATA,
-    chatAvailable: false,
-    endpoints: ['/health', '/v1/quota', '/v1/credits', '/v1/usage'],
+    chatAvailable: true,
+    endpoints: ['/health', '/v1/models', '/v1/chat/completions', '/v1/quota', '/v1/credits', '/v1/usage'],
     uptimeSeconds: Math.round((Date.now() - STARTED_AT) / 1000),
   });
 }
+
+// ---------------------------------------------------------------- 路由
 
 const server = http.createServer(async (req, res) => {
   let url;
@@ -491,26 +872,35 @@ const server = http.createServer(async (req, res) => {
     return sendError(res, 400, '非法 URL');
   }
 
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    return sendError(res, 405, '本反代只读，只支持 GET');
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.end();
+    return;
   }
 
   try {
     if (url.pathname === '/health' || url.pathname === '/') return await handleHealth(res);
+    if (url.pathname === '/v1/models' && (req.method === 'GET' || req.method === 'HEAD')) {
+      const refresh = ['1', 'true', 'yes'].includes(String(url.searchParams.get('refresh') || '').toLowerCase());
+      try {
+        const models = await listModels({ refresh });
+        return sendJson(res, 200, { object: 'list', data: models });
+      } catch (err) {
+        return sendError(res, 502, err.message, 'lingxi_models');
+      }
+    }
+    if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {
+      const body = await readBody(req);
+      return await handleChat(req, res, url, body);
+    }
     if (url.pathname === '/v1/quota' || url.pathname === '/v1/credits' || url.pathname === '/admin/api/credits') {
+      if (req.method !== 'GET') return sendError(res, 405, '只支持 GET');
       return await handleQuota(res, url);
     }
-    if (url.pathname === '/v1/usage') return await handleUsage(res, url);
+    if (url.pathname === '/v1/usage' && req.method === 'GET') return await handleUsage(res, url);
 
-    // 刻意不提供模型与对话端点：宁可明确 404，也不要在客户端里列一个选中就报错的 provider。
-    if (url.pathname === '/v1/models' || url.pathname.startsWith('/v1/chat')) {
-      return sendError(
-        res,
-        501,
-        'WPS 灵犀只接入积分查询：上游没有可直达的 OpenAI 兼容对话入口（见 integrations/lingxi2api/README.md）',
-        'lingxi_chat_unavailable',
-      );
-    }
     sendError(res, 404, `未知端点：${url.pathname}`);
   } catch (err) {
     log('请求处理失败:', err && err.stack ? err.stack : err);
@@ -519,6 +909,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+server.requestTimeout = 0;
+
 server.on('error', (err) => {
   console.error('[lingxi-proxy] 启动失败:', err.message);
   process.exit(1);
@@ -526,17 +918,22 @@ server.on('error', (err) => {
 
 server.listen(PORT, HOST, () => {
   const auth = readSid();
-  log(`WPS 灵犀积分反代已启动：http://${HOST}:${PORT}（只读，不含对话）`);
+  log(`WPS 灵犀反代已启动：http://${HOST}:${PORT}（OpenAI 兼容 + 积分）`);
   log(`桌面端目录：${APP_DATA}`);
   log(
     auth.sid
       ? `登录态：已取到 wps_sid（${maskSid(auth.sid)}，来源 ${auth.source}）`
       : `登录态：${auth.error || '未登录'}（打开 WPS 灵犀桌面端登录后自动生效）`,
   );
+  // 预热 app-server，让首次 /v1/models 更快
+  appServer.ensure().then(() => listModels()).catch((err) => {
+    log('app-server 预热失败（首次请求时会重试）：', err.message);
+  });
 });
 
 function shutdown(signal) {
   log(`收到 ${signal}，正在退出`);
+  appServer._stopChild();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 3000).unref();
 }

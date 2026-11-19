@@ -13,7 +13,7 @@ integrations/
   raccoon2api/     商汤小浣熊（Raccoon Work）的 OpenAI 兼容反代（本仓库自写，零依赖 Node）
   qwenwork2api/    千问办公（QwenWork CN）的 OpenAI/Anthropic 反代（本仓库自写，零依赖 Node）
   dumate2api/      百度搭子（DuMate）的 OpenAI 兼容反代（本仓库自写，零依赖 Node）
-  lingxi2api/      WPS 灵犀的智点积分反代（只读，无对话；零依赖 Node）
+  lingxi2api/      WPS 灵犀反代（app-server JSON-RPC → OpenAI 对话 + 智点积分；零依赖 Node）
 ```
 
 router 的默认路径：
@@ -27,7 +27,7 @@ router 的默认路径：
 | `ROUTER_RACCOON_DIR` | `integrations/raccoon2api` | raccoon-proxy.js |
 | `ROUTER_QWENWORK_DIR` | `integrations/qwenwork2api` | qwenwork-proxy.js |
 | `ROUTER_DUMATE_DIR` | `integrations/dumate2api` | dumate-proxy.js |
-| `ROUTER_LINGXI_DIR` | `integrations/lingxi2api` | lingxi-proxy.js（只接积分） |
+| `ROUTER_LINGXI_DIR` | `integrations/lingxi2api` | lingxi-proxy.js（对话 + 积分） |
 
 本地文件缺失时，router 会回退到旧位置（`E:\qodbuddy2pi`、
 `E:\trae-free-credits\1-traework2api`、`~/codearts2api`），所以迁移期间仍可运行。

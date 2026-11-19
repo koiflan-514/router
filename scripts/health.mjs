@@ -182,12 +182,23 @@ const SOURCES = [
     probeModel: 'glm-5',
   },
   {
+    id: 'lingxi',
+    title: 'WPS 灵犀',
+    url: 'http://127.0.0.1:8796/v1',
+    modelsPath: '/models',
+    // 登录态（wps_sid）在桌面端 Electron cookie 库里，由反代自己 DPAPI 解密；
+    // 体检只探反代端口与试打，不重复实现那一层。
+    authFile: null,
+    // pro 模式部分账号不可用；deepseek-v4.1-flash 实测最稳且便宜
+    probeModel: 'deepseek-v4.1-flash',
+  },
+  {
     id: 'gateway',
     title: '统一网关',
     url: 'http://127.0.0.1:8785/v1',
     modelsPath: '/models',
-    // 网关自己不持有凭证：它靠下面十家的凭证工作，所以这里没有 authFile。
-    // 它没起来不影响十家任何一家，所以体检里只报「未开」而不是错误。
+    // 网关自己不持有凭证：它靠下面各家的凭证工作，所以这里没有 authFile。
+    // 它没起来不影响任何一家上游，所以体检里只报「未开」而不是错误。
     authFile: null,
     // 打裸模型名：网关会在所有能提供它的供应商里挑一家，顺带验证了调度
     probeModel: 'glm-5.3-flash',

@@ -15,7 +15,7 @@
 | Loomy / 小浣熊 | 订阅积分，无公开并发数 | 按「一个人开几个标签页」估 |
 | 千问办公 | 云端 MaaS 按会话计量 | 代理 `QWENWORK_LIMITS=off` 可临时关掉 |
 | 百度搭子 | 订阅积分，桌面端与反代共用一份额度 | 代理 `DUMATE_LIMITS=off` 可临时关掉 |
-| WPS 灵犀 | 只读积分查询（GET），不占对话额度 | 并发 1，只读不签到 |
+| WPS 灵犀 | 订阅智点，桌面端与反代共用一份额度 | 反代内部 RPC 串行；并发 2 与「开两个窗口」相当 |
 
 问题在于客户端：opencode / Claude Code 会并行跑工具、开子代理；CI 里并发跑用例；
 一次重试风暴能在 2 秒内打出十几路。上游看到的是**同一个账号的十几路并发**——
@@ -70,8 +70,8 @@ const HARD_CAPS = {
   raccoon: { concurrency: 2 },
   qwenwork: { concurrency: 2 },
   dumate: { concurrency: 2 },
-  // WPS 灵犀只做只读积分查询，并发 1 足够
-  lingxi: { concurrency: 1 },
+  // WPS 灵犀：订阅智点，反代内部 RPC 串行，并发 2 与「开两个窗口」相当
+  lingxi: { concurrency: 2 },
 };
 ```
 

@@ -150,7 +150,10 @@ function toOpencodeModel(entry, { defaultContext = 1000000, defaultOutput = 1310
   } else if (entry.supports_reasoning_summary_parameter !== undefined || entry.default_reasoning_level) {
     model.reasoning = true;
   }
-  model.tool_call = true;
+  // 默认支持工具调用；但有些上游（如 WPS 灵犀的 agent）不吐 OpenAI tool_calls，
+  // 显式标 false 时如实告知 opencode，免得它把这类模型当编码 agent 驱动。
+  const noTools = entry.tool_call === false || (entry.capabilities && entry.capabilities.tool_call === false);
+  model.tool_call = !noTools;
   return model;
 }
 

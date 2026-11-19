@@ -19,7 +19,7 @@
 │   │ 小浣熊: raccoon-proxy :8793            │
 │   │ 千问办公: qwenwork-proxy :8794         │
 │   │ 百度搭子: dumate-proxy :8795           │
-│   │ WPS 灵犀: lingxi-proxy :8796（仅积分） │
+│   │ WPS 灵犀: lingxi-proxy :8796           │
 └───────────┬─────────────┘   └───────────────┬───────────────────────┘
             │                                 │
 ┌───────────▼─────────────┐   ┌───────────────▼───────────────────────┐
@@ -55,11 +55,11 @@ OpenAI 格式。**判断新供应商要不要写代理：看它是否说 OpenAI�
 | 8793 | raccoon-proxy.js | `router.mjs up raccoon` | `/health`, `/v1/*`, `/v1/quota` |
 | 8794 | qwenwork-proxy.js | `router.mjs up qwenwork` | `/health`, `/v1/*`, `/v1/quota` |
 | 8795 | dumate-proxy.js | `router.mjs up dumate` | `/health`, `/v1/*`, `/v1/quota` |
-| 8796 | lingxi-proxy.js | `router.mjs up lingxi` | `/health`, `/v1/quota`, `/v1/usage`（**只读，无对话**） |
+| 8796 | lingxi-proxy.js | `router.mjs up lingxi` | `/health`, `/v1/*`（对话）, `/v1/quota`, `/v1/usage` |
 | 10087 | codearts2api | `router.mjs up codearts` | `/v1/*`, `/admin` |
 | 8785 | gateway/server.mjs | `router.mjs gateway up` | `/v1/*`, `/v1/gateway/*`（**叠加层，可选**） |
 
-十个反代的进程都由 `router.mjs` 直接 spawn，PID 记录在
+各家反代的进程都由 `router.mjs` 直接 spawn，PID 记录在
 `E:\router\.run\processes.json`。Windows 登录自启用
 `node router.mjs service install [id...]` 生成 `router-<id>` 计划任务；旧的
 `qoder2pi-proxy` / `workbuddy2pi` 任务可以保留，router 启动前会先把它们 `/End`。
@@ -107,6 +107,7 @@ provider 与顶层设置原样保留，改写前备份。
 | ZCode | 反代 `/v1/models` | bridge 按账号套餐聚合 |
 | Loomy | 上游 `/models?type=chat`（反代转发） | 只保留对话模型；生图模型不能走 chat/completions |
 | 百度搭子 | 桌面端落盘的 `qianfan_desk_xdg/<账号>/config/opencode/opencode.json` | main-server 的 `/api/qianfanproxy/v1/models` 是 404，没有清单接口 |
+| WPS 灵犀 | app-server 的 `model/list`（反代实时拉） | 云端没有 OpenAI 兼容面；反代 spawn 官方 `lingxi.exe --stdin` 走 JSON-RPC |
 
 WorkBuddy 的反代静态表里列着服务端根本不认的 `claude-4.0`/`gpt-5`，却漏了真正能用的
 `deepseek-v4.1-flash`。pi 扩展读的是桌面端落盘的产品配置（`~/.workbuddy/cache/
