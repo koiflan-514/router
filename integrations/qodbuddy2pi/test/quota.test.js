@@ -319,3 +319,50 @@ test('CODEARTS 常量指向第三方网关的默认端口', () => {
   assert.strictEqual(quota.CODEARTS.provider, 'codearts');
   assert.strictEqual(quota.CODEARTS.port, 10087);
 });
+
+// ---------------------------------------------------------------- 有道龙虾
+
+/**
+ * 龙虾的「总余额」和「积分包」是两套数字：balance 是反代算好的可用总额，
+ * buckets 是逐个积分包。合计必须用前者，否则会把同 1000 分算两遍。
+ */
+const lobsterRow = (extra = {}) => ({
+  provider: 'lobster',
+  title: '有道龙虾（LobsterAI）',
+  available: true,
+  kind: 'lobster',
+  account: 'tester',
+  buckets: [{ label: '可用积分', total: 1100, used: 1011.5, remaining: 88.5, unit: 'credits' }],
+  packs: [
+    { label: '新订阅活动', total: 1000, used: 950, remaining: 50, unit: 'credits' },
+    { label: '每日登录奖励', total: 100, used: 0, remaining: 100, unit: 'credits' },
+  ],
+  detail: ['Pro'],
+  checkin: { supported: true, claimed: false, claimable: true, rewardCredits: 10 },
+  ...extra,
+});
+
+test('renderText: 龙虾显示可用/总额/百分比，并逐个列出积分包', () => {
+  const text = quota.renderText([lobsterRow()]);
+  assert.match(text, /\[有道龙虾（LobsterAI）\]/);
+  assert.match(text, /剩 88\.5/);
+  assert.match(text, /共 1100/);
+  assert.match(text, /8%/);
+  assert.match(text, /新订阅活动：50\/1000 credits/);
+  assert.match(text, /每日登录奖励：100\/100 credits/);
+  assert.match(text, /签到：今日可领 10/);
+});
+
+test('summarize: 龙虾只按总余额计一次，不把积分包重复相加', () => {
+  const s = quota.summarize([lobsterRow()]);
+  assert.strictEqual(s.remaining, 88.5, 'buckets 只有一条「可用积分」，不应等于 50+100');
+  assert.deepStrictEqual(s.claimable.map((c) => c.provider), ['lobster']);
+  assert.strictEqual(s.claimable[0].reward, 10, 'summarize 读的是 rewardCredits');
+});
+
+test('renderText: 龙虾已签到时不再说可领', () => {
+  const row = lobsterRow({ checkin: { supported: true, claimed: true, claimable: false, rewardCredits: 0 } });
+  const text = quota.renderText([row]);
+  assert.match(text, /签到：今日已签到/);
+  assert.doesNotMatch(text, /今日可领/);
+});

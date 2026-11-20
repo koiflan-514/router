@@ -78,6 +78,9 @@ const HARD_CAPS = {
   // WPS 灵犀：订阅智点，桌面端与反代共用同一份额度；反代内部 RPC 串行，
   // 并发 2 与「一个人开两个窗口」相当
   lingxi: { concurrency: 2 },
+  // 有道龙虾：桌面端 tokenProxy 与反代共用同一账号额度；并发 2 与桌面端
+  // 同时跑一个编码 agent + 一个对话窗口相当
+  lobster: { concurrency: 2 },
 };
 
 /** 每家的默认档位：越脆的上游越保守。 */
@@ -94,6 +97,7 @@ const DEFAULT_TIER = {
   qwenwork: 'balanced',
   dumate: 'balanced',
   lingxi: 'balanced',
+  lobster: 'balanced',
 };
 
 /** 自由供应商（云端 key）：按「普通 API 的礼貌用量」给一档，别把免费额度刷成风控。 */

@@ -971,8 +971,146 @@ async function lingxiCredits() {
   };
 }
 
-// ---------------------------------------------------------------- 汇总
+// ---------------------------------------------------------------- 有道龙虾（LobsterAI）
 
+/**
+ * 有道龙虾的积分包、签到状态与逐模型倍率都在本仓库自写的反代 lobster-proxy 里（:8797）：
+ *   GET  /v1/quota   → balance { remaining, total, used } + wallet + buckets + multipliers + checkin
+ *   POST /v1/checkin → 每日签到（幂等，今天签过回「今日已签到」）
+ *
+ * 与 Loomy/小浣熊不同，这家反代算好了总额（积分包 + 月度 + 赠送），能画进度条。
+ * 签到会真实领取积分，所以 collectAll 只读；要签得显式调 /v1/checkin。
+ */
+const LOBSTER = {
+  provider: 'lobster',
+  title: '有道龙虾（LobsterAI）',
+  port: 8797,
+};
+
+async function lobsterCredits() {
+  const base = `http://127.0.0.1:${LOBSTER.port}`;
+  const quota = await getJson(`${base}/v1/quota`);
+  if (quota.status === 0) {
+    return {
+      provider: LOBSTER.provider,
+      title: LOBSTER.title,
+      available: false,
+      kind: 'lobster',
+      reason: `本机有道龙虾反代未运行（127.0.0.1:${LOBSTER.port}）`,
+    };
+  }
+
+  const q = quota.json || {};
+  if (!quota.ok || q.ok !== true) {
+    const message = (q.error && q.error.message) || `额度接口返回 ${quota.status || quota.error || '错误'}`;
+    return {
+      provider: LOBSTER.provider,
+      title: LOBSTER.title,
+      available: false,
+      kind: 'lobster',
+      reason: quota.status === 401 ? '有道龙虾登录态失效（打开 LobsterAI 桌面端重新登录）' : message,
+    };
+  }
+
+  const balance = q.balance || {};
+  const wallet = q.wallet || {};
+  const user = q.user || {};
+  const packs = (Array.isArray(q.buckets) ? q.buckets : []).filter((b) => b && Number(b.remaining) > 0);
+  const expiring = packs
+    .map((b) => (b.cycleEnd ? new Date(b.cycleEnd).getTime() : NaN))
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b)[0];
+  const multipliers = q.multipliers && typeof q.multipliers === 'object' ? q.multipliers : null;
+  const multiplierCount = multipliers ? Object.keys(multipliers).length : 0;
+
+  const detail = [];
+  if (user.plan) detail.push(user.plan);
+  if (user.accountMode) detail.push(user.accountMode);
+  if (user.periodEnd) detail.push(`本周期到 ${String(user.periodEnd).slice(0, 10)}`);
+  for (const [key, label] of [
+    ['monthly', '月度'],
+    ['bonus', '赠送'],
+    ['boost', '积分包'],
+    ['trial', '试用'],
+  ]) {
+    const value = Number(wallet[key] || 0);
+    if (value !== 0) detail.push(`${label} ${fmtNum(value)}`);
+  }
+  detail.push(multiplierCount > 0 ? `${multiplierCount} 个模型有倍率` : '上游没有逐模型倍率');
+
+  const checkin = q.checkin || null;
+
+  return {
+    provider: LOBSTER.provider,
+    title: LOBSTER.title,
+    available: true,
+    kind: 'lobster',
+    baseUrl: base,
+    fetchedAt: q.fetchedAt,
+    account: user.name || user.yid || undefined,
+    // 与 dumate/lingxi 一致：buckets 只放一条「总余额」，这样 summarize 的合计
+    // 不会和余额对不上。各个积分包单独放 packs，只用于展示明细。
+    buckets: [
+      {
+        label: '可用积分',
+        total: Number(balance.total || 0),
+        used: Number(balance.used || 0),
+        remaining: Number(balance.remaining || 0),
+        unit: balance.unit || 'credits',
+        ...(expiring ? { expiresAt: expiring } : {}),
+      },
+    ],
+    packs: packs.slice(0, 4).map((b) => ({
+      label: b.label || '积分包',
+      total: Number(b.total || 0),
+      used: Number(b.used || 0),
+      remaining: Number(b.remaining || 0),
+      unit: b.unit || 'credits',
+    })),
+    detail,
+    multipliers,
+    checkin: checkin
+      ? {
+          supported: checkin.supported !== false,
+          claimed: checkin.claimed === true,
+          claimable: checkin.claimable === true,
+          // 与其它来源统一用 rewardCredits：summarize 的「今日可领」读的是这个字段
+          rewardCredits: Number(checkin.reward || 0),
+          note: checkin.note || null,
+        }
+      : undefined,
+    ...(expiring ? { expiresAt: expiring } : {}),
+  };
+}
+
+/** 有道龙虾反代 /v1/checkin：幂等，今天签过只回「今日已签到」。 */
+async function lobsterClaim() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${LOBSTER.port}/v1/checkin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {}
+    if (!res.ok || !json) {
+      const message = (json && json.error && (json.error.message || json.error)) || `签到接口返回 HTTP ${res.status}`;
+      return { ok: false, claimed: false, unsupported: false, reason: message };
+    }
+    if (json.ok === false) {
+      return { ok: false, claimed: false, unsupported: false, reason: json.reason || '签到失败' };
+    }
+    return { ok: true, claimed: json.claimed === true, unsupported: false, reason: json.detail || '已执行' };
+  } catch (err) {
+    return { ok: false, claimed: false, unsupported: false, reason: err.message };
+  }
+}
+
+// ---------------------------------------------------------------- 汇总
 /**
  * 收集所有能查到的来源。
  *
@@ -996,6 +1134,7 @@ async function collectAll({ only = null } = {}) {
   if (wanted('qwenwork')) tasks.push(qwenworkCredits());
   if (wanted('dumate')) tasks.push(dumateCredits());
   if (wanted('lingxi')) tasks.push(lingxiCredits());
+  if (wanted('lobster')) tasks.push(lobsterCredits());
   const results = await Promise.all(tasks);
   return results;
 }
@@ -1162,6 +1301,26 @@ function renderText(rows, { width = 60 } = {}) {
       lines.push('  智点在 WPS 灵犀桌面端做任务领取，插件不自动签');
       continue;
     }
+    if (row.kind === 'lobster') {
+      const b = (row.buckets || [])[0] || {};
+      const pct = b.total > 0 ? Math.round((b.remaining / b.total) * 100) : null;
+      const bits = [
+        `剩 ${fmtNum(b.remaining)}`,
+        b.total ? `共 ${fmtNum(b.total)}` : null,
+        pct !== null ? `${pct}%` : null,
+      ].filter(Boolean);
+      const meta = [row.account ? `账号 ${row.account}` : null, ...(row.detail || [])].filter(Boolean).join(' · ');
+      lines.push(`${head} ${bits.join(' / ')}${meta ? `　（${meta}）` : ''}`);
+      for (const pack of row.packs || []) {
+        lines.push(`  ${pack.label}：${fmtNum(pack.remaining)}/${fmtNum(pack.total)} ${pack.unit || 'credits'}`);
+      }
+      if (row.checkin && row.checkin.supported) {
+        lines.push(
+          `  签到：${row.checkin.claimed ? '今日已签到' : row.checkin.claimable ? `今日可领 ${fmtNum(row.checkin.rewardCredits)}` : '今日不可领'}`,
+        );
+      }
+      continue;
+    }
     if (row.kind === 'zcode') {
       const parts = (row.buckets || []).map(
         (b) => `${b.label} ${fmtNum(b.remaining)}/${fmtNum(b.total)} ${b.unit}`,
@@ -1239,10 +1398,13 @@ module.exports = {
   qwenworkCredits,
   dumateCredits,
   lingxiCredits,
+  lobsterCredits,
+  lobsterClaim,
   ZCODE,
   LOOMY,
   RACCOON,
   QWENWORK,
+  LOBSTER,
   collectAll,
   // 展示
   summarize,

@@ -20,6 +20,7 @@
 │   │ 千问办公: qwenwork-proxy :8794         │
 │   │ 百度搭子: dumate-proxy :8795           │
 │   │ WPS 灵犀: lingxi-proxy :8796           │
+│   │ 有道龙虾: lobster-proxy :8797          │
 └───────────┬─────────────┘   └───────────────┬───────────────────────┘
             │                                 │
 ┌───────────▼─────────────┐   ┌───────────────▼───────────────────────┐
@@ -56,6 +57,7 @@ OpenAI 格式。**判断新供应商要不要写代理：看它是否说 OpenAI�
 | 8794 | qwenwork-proxy.js | `router.mjs up qwenwork` | `/health`, `/v1/*`, `/v1/quota` |
 | 8795 | dumate-proxy.js | `router.mjs up dumate` | `/health`, `/v1/*`, `/v1/quota` |
 | 8796 | lingxi-proxy.js | `router.mjs up lingxi` | `/health`, `/v1/*`（对话）, `/v1/quota`, `/v1/usage` |
+| 8797 | lobster-proxy.js | `router.mjs up lobster` | `/health`, `/v1/*`（对话）, `/v1/quota`, `/v1/checkin` |
 | 10087 | codearts2api | `router.mjs up codearts` | `/v1/*`, `/admin` |
 | 8785 | gateway/server.mjs | `router.mjs gateway up` | `/v1/*`, `/v1/gateway/*`（**叠加层，可选**） |
 
@@ -78,6 +80,7 @@ OpenAI 格式。**判断新供应商要不要写代理：看它是否说 OpenAI�
 | 千问办公 | `~/.qwenworkcn/engine-maas-key.dat` | MaaS key（`sk-mm-v1.…`），Chromium OSCrypt(`v10`) 加密；主密钥在 `%APPDATA%/QwenWorkCN/Local State` 的 `os_crypt.encrypted_key`（DPAPI）。反代自己 exchange 续期 |
 | 百度搭子 | `%APPDATA%\qianfan-desktop-app\auth.json` | `activeProfileId` + `accountProfiles[].bceUserId/displayName`；桌面端写入，反代只读。main-server 的 in-app key 只在 `log\electron.log` 里 |
 | WPS 灵犀 | `%APPDATA%\WPS 灵犀\Partitions\lingxi-passport-v2-*\Network\Cookies` | `wps_sid` 在 cookie 库里（**不在** `auth.json`，那份是 runtime）；DPAPI 主密钥（`Local State`）+ AES-256-GCM 解出 |
+| 有道龙虾 | `%APPDATA%\LobsterAI\lobsterai.sqlite` 的 `kv.auth_tokens` / `kv.auth_user` | 桌面端写入的 access/refresh token 与用户信息；反代只读。对话优先走桌面端 tokenProxy（`openclaw/loopback-state.json` 的 `ports.tokenProxy`），桌面端退出后直连上游 |
 
 **关键点：Qoder 的 auth.json 是 pi 与 opencode 共用的。** 代理读同一份文件，所以
 在 pi 里登录一次，两边都能用；代理刷新后会写回，pi 也跟着受益。
@@ -88,7 +91,8 @@ OpenAI 格式。**判断新供应商要不要写代理：看它是否说 OpenAI�
 
 - `~/.config/opencode/opencode.jsonc` —— Trae 的 `trae-local` 在这里（历史原因）
 - `~/.config/opencode/opencode.json` —— 本项目写的 provider（`qoder-cn`/`qoder`/
-  `workbuddy`/`workbuddy-global`/`codearts`/`zcode`/`loomy`/`raccoon`/`qwenwork`/`dumate`）
+  `workbuddy`/`workbuddy-global`/`codearts`/`zcode`/`loomy`/`raccoon`/`qwenwork`/`dumate`/
+  `lingxi`/`lobster`）
 
 合并逻辑收在 `assets/opencode-config.js` 一处：只改 `provider` 里自己那个键，别的
 provider 与顶层设置原样保留，改写前备份。
@@ -108,6 +112,7 @@ provider 与顶层设置原样保留，改写前备份。
 | Loomy | 上游 `/models?type=chat`（反代转发） | 只保留对话模型；生图模型不能走 chat/completions |
 | 百度搭子 | 桌面端落盘的 `qianfan_desk_xdg/<账号>/config/opencode/opencode.json` | main-server 的 `/api/qianfanproxy/v1/models` 是 404，没有清单接口 |
 | WPS 灵犀 | app-server 的 `model/list`（反代实时拉） | 云端没有 OpenAI 兼容面；反代 spawn 官方 `lingxi.exe --stdin` 走 JSON-RPC |
+| 有道龙虾 | 上游 `/api/models/available`（反代实时拉） | 桌面端目录与上游可用集一致；反代额外补 `yd-fast`/`yd-ultra` 两个虚拟档位 |
 
 WorkBuddy 的反代静态表里列着服务端根本不认的 `claude-4.0`/`gpt-5`，却漏了真正能用的
 `deepseek-v4.1-flash`。pi 扩展读的是桌面端落盘的产品配置（`~/.workbuddy/cache/

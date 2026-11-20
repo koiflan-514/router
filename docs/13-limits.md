@@ -72,6 +72,8 @@ const HARD_CAPS = {
   dumate: { concurrency: 2 },
   // WPS 灵犀：订阅智点，反代内部 RPC 串行，并发 2 与「开两个窗口」相当
   lingxi: { concurrency: 2 },
+  // 有道龙虾：与桌面端 tokenProxy 共用同一账号额度，并发 2 与「编码 agent + 对话窗口」相当
+  lobster: { concurrency: 2 },
 };
 ```
 

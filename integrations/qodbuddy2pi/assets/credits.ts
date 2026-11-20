@@ -28,6 +28,7 @@ const quota = requireCjs(path.join(import.meta.dirname, "quota.js")) as {
   qoderClaim(provider: string): Promise<ClaimResult>;
   traeClaim(): Promise<ClaimResult>;
   codeartsClaim(): Promise<ClaimResult>;
+  lobsterClaim(): Promise<ClaimResult>;
   fmtNum(n: number | string): string;
   summarize(rows: QuotaRow[]): Summary;
   renderText(rows: QuotaRow[], opts?: { width?: number }): string;
@@ -102,7 +103,7 @@ type Summary = { available: string[]; remaining: number; unit: string; claimable
 /** 状态栏只需要 setStatus，这里收窄成一个最小接口，便于在回调之间传递。 */
 type StatusCtx = { ui: { setStatus(key: string, text: string): void } };
 
-const CLAIMABLE_PROVIDERS = new Set(["qoder-cn", "qoder", "trae", "codearts"]);
+const CLAIMABLE_PROVIDERS = new Set(["qoder-cn", "qoder", "trae", "codearts", "lobster"]);
 
 async function claimAll(rows: QuotaRow[]): Promise<{ lines: string[]; anyClaimed: boolean }> {
   const lines: string[] = [];
@@ -130,6 +131,14 @@ async function claimAll(rows: QuotaRow[]): Promise<{ lines: string[]; anyClaimed
         const names = pending.map((a) => a.name).join("、");
         lines.push(`[${row.title}] ${names} 今日未签到；${trae.reason}`);
       }
+      continue;
+    }
+
+    // 有道龙虾：反代有幂等的 POST /v1/checkin
+    if (row.provider === "lobster") {
+      const res = await quota.lobsterClaim();
+      if (res.ok && res.claimed) anyClaimed = true;
+      lines.push(`[${row.title}] ${res.reason}`);
       continue;
     }
 
@@ -199,7 +208,7 @@ const creditsTool = defineTool({
     provider: Type.Optional(
       Type.Unsafe<string>({
         type: "string",
-        description: "Limit to one source: qoder-cn, qoder, trae, workbuddy, workbuddy-global, codearts, zcode, loomy, raccoon, qwenwork, dumate, lingxi.",
+        description: "Limit to one source: qoder-cn, qoder, trae, workbuddy, workbuddy-global, codearts, zcode, loomy, raccoon, qwenwork, dumate, lingxi, lobster.",
       }),
     ),
   }),
@@ -237,7 +246,7 @@ export default function creditsExtension(pi: ExtensionAPI) {
       const wantCheckin = arg === "checkin" || arg === "签到";
       const only = [
         "qoder-cn", "qoder", "trae", "workbuddy", "workbuddy-global",
-        "codearts", "zcode", "loomy", "raccoon", "qwenwork", "dumate", "lingxi",
+        "codearts", "zcode", "loomy", "raccoon", "qwenwork", "dumate", "lingxi", "lobster",
       ].includes(arg) ? [arg] : null;
 
       const rows = await quota.collectAll({ only });

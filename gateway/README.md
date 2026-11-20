@@ -234,7 +234,7 @@ node router.mjs gateway local off          # 全关
 | 上游能力 | `/v1/messages` | `/v1/chat/completions` |
 |---|---|---|
 | `both`（CodeArts、ZCode） | 原生直通 | 原生直通 |
-| `openai`（Qoder、Trae、WorkBuddy、Loomy） | **转换** | 原生直通 |
+| `openai`（Qoder、Trae、WorkBuddy、Loomy、有道龙虾） | **转换** | 原生直通 |
 
 三条取舍，都是「宁可报错也不静默丢东西」：
 

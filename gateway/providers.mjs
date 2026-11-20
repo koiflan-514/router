@@ -59,6 +59,9 @@ export const DESCRIPTORS = [
   // OpenAI 方言。灵犀是完整 agent，不吐 tool_calls——网关转发 tools 时它只会
   // 返回文本，适合对话不适合编码驱动（见 integrations/lingxi2api/README.md）。
   { id: 'lingxi', port: 8796, dialect: 'openai', key: 'lingxi-local' },
+  // 有道龙虾（LobsterAI）：本机反代优先复用桌面端的 tokenProxy，桌面端退出后直连
+  // 上游；对外只有 OpenAI 方言。yd-fast / yd-ultra 是虚拟档位，反代转发前会先解析。
+  { id: 'lobster', port: 8797, dialect: 'openai', key: 'lobster-local' },
 ];
 
 export const BY_ID = new Map(DESCRIPTORS.map((d) => [d.id, d]));
