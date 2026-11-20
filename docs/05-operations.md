@@ -946,6 +946,7 @@ ln -sf ~/.local/opt/raccoon-ai/raccoon-ai ~/.local/bin/raccoon-ai
 | `scripts/wine-setup.sh` | 一键建 prefix + 灌字体 + 修 FontLink + 自检 |
 | `scripts/wine-tune.sh` | 按社区最佳实践调优 prefix（NTSync/字体平滑/DXVK 配置） |
 | `scripts/wine-run-app.sh` | 通用启动器：`lingxi` / `lobster`，含性能与渲染参数 |
+| `scripts/wine-install-menu.sh` | 把两家写进应用菜单（.desktop + hicolor 图标，可重复执行） |
 | `scripts/wine-run-lingxi.sh` | 兼容入口，等价于 `wine-run-app.sh lingxi` |
 | `scripts/wine-patch-openclaw.mjs` | 给龙虾的 openclaw 网关打 chmod-EBUSY 补丁 |
 | `scripts/wine-node-shim.js` | Wine 下 Node 的 chmod 补丁（EBUSY → 无操作） |
