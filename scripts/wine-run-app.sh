@@ -22,6 +22,7 @@
 #   bash scripts/wine-run-app.sh lingxi --wayland     # 强制 Wine 的 Wayland 驱动
 #   bash scripts/wine-run-app.sh lingxi --no-dxvk     # 退回 Wine 内置 wined3d
 #   bash scripts/wine-run-app.sh lingxi --hud         # 确认 DXVK 接管（日常别开）
+#   bash scripts/wine-run-app.sh lobster --remote-debug 9333   # 开 CDP，量真实帧率
 
 set -euo pipefail
 
@@ -43,6 +44,9 @@ while [ $# -gt 0 ]; do
     --angle-vulkan) EXTRA+=(--use-angle=vulkan); shift ;;
     --no-gpu) EXTRA+=(--disable-gpu); shift ;;
     --gpu-compositing-off) EXTRA+=(--disable-gpu-compositing); shift ;;
+    --gpu-compositing-on) KEEP_GPU_COMPOSITING=1; shift ;;
+    --remote-debug) EXTRA+=(--remote-debugging-port="$2"); shift 2 ;;
+    --extra) EXTRA+=("$2"); shift 2 ;;
     -h|--help) sed -n '1,/^set -euo/p' "$0" | sed '$d'; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
@@ -61,19 +65,31 @@ case "$APP" in
     ;;
 esac
 
-# 基础渲染参数。两个都是实测必需的：
+# 基础渲染参数。两家在 Wine 下的**呈现路径不同**，所以默认值不一样：
 #
 #   --disable-direct-composition   Chromium 用 DirectComposition 建交换链，
 #                                  而 DXVK 没实现 CreateSwapChainForComposition →
-#                                  不加会直接崩（DxgiFactory 报 Not implemented）
+#                                  不加会直接崩（DxgiFactory 报 Not implemented）。
+#                                  两家都要。
 #
-#   --disable-gpu-compositing      只关「显示合成器」，**保留 GPU 光栅**。
-#                                  不加的话灵犀的页面会出现「背景模糊层在、
-#                                  内容层不绘制」——看着像白屏/糊屏，但按钮仍能点
-#                                  （命中测试走的是渲染树，不受合成影响）。
-#                                  加上之后 GPU 光栅照常，合成退回软件路径，
-#                                  内容就正常画出来了。
-BASE_FLAGS=(--disable-direct-composition --disable-gpu-compositing)
+# 龙虾（lobster）：只加上面那一条，**保留 GPU 合成**。
+#   实测（注入全屏模糊动画做压力）：GPU 合成 ≈ 55fps，软件合成 ≈ 13fps。
+#   龙虾的窗口走默认原生标题栏，GPU 合成下渲染完全正常。
+#
+# 灵犀（lingxi）：还要加 `--disable-gpu-compositing`。
+#   GPU 合成下灵犀的**渲染器是好的**（CDP Page.captureScreenshot 能截到完整 UI），
+#   但最终 SwapChain 呈现到窗口是灰/黑（内容层不上屏）。
+#   已排除：DXVK vs wined3d、ANGLE Vulkan、CPU 光栅、透明标题栏/roundedCorners、
+#   GPU memory buffer、Wayland 驱动（直接崩）。软件合成是唯一能正常显示的路径，
+#   实测压力下 50-60fps，可用。
+BASE_FLAGS=(--disable-direct-composition)
+if [ "$APP" = "lingxi" ]; then
+  BASE_FLAGS+=(--disable-gpu-compositing)
+fi
+# 诊断用：强制开/关 GPU 合成，用来复现/对照帧率。
+if [ "${KEEP_GPU_COMPOSITING:-0}" = "1" ]; then
+  BASE_FLAGS=(--disable-direct-composition)
+fi
 
 export WINEPREFIX="$PREFIX"
 export WINEDEBUG="${WINEDEBUG:--all}"

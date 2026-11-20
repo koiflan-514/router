@@ -759,29 +759,47 @@ bash scripts/wine-run-lingxi.sh
 症状：窗口出来了，背景（模糊壁纸）也在，但正文/卡片不绘制；鼠标移上去**按钮仍有
 hover 和点击响应**。
 
-真因是 **Chromium 的合成层没画**，不是页面没加载：
+命中测试走的是渲染树（layout tree），它已经建好了，所以「能点」不代表「画出来了」。
+真正卡住的是**最终呈现**这一步。
 
-- 命中测试（hit test）走的是渲染树（layout tree），它已经建好了；
-- 但显示合成器（viz/display compositor）交给 DXVK 的那条交换链路径画不出内容层。
+关键证据：GPU 合成模式下用 CDP 抓渲染器截图（`Page.captureScreenshot`）能拿到**完整
+正确的 UI**，但窗口本身是灰/黑（`niri screenshot-window`）。说明：
 
-修法：加 `--disable-gpu-compositing`。
+- 渲染器、光栅、合成帧都是对的；
+- 坏在最后一步——SwapChain 把合成帧呈现到 Wine 窗口。
 
-它只关**显示合成器**，**GPU 光栅（raster）仍然开启**，所以不是「退回纯软件渲染」——
-绘制还是 GPU 干，只是合成换回软件路径。实测（灵犀）加之前是糊屏，加之后侧边栏、
-聊天区、模型选择器全部正常。
+修法（灵犀）：加 `--disable-gpu-compositing`，把显示合成退回软件路径。
 
-> 对照实验（用来定位到底哪一层坏了）：
-> - `--disable-direct-composition` 单独加 → 不崩，但仍糊屏
-> - `--disable-gpu-compositing` 单独加 → 正常渲染
-> - `--disable-gpu`（纯软件）→ 正常渲染，但没必要，白丢 GPU 光栅
-> - `--use-angle=gl` → 窗口直接没建出来
+> 已排除的路径（全部实测失败，避免以后重复踩）：
+> - DXVK vs wined3d（`WINEDLLOVERRIDES=d3d11,dxgi=b`）→ 都灰屏
+> - `--use-angle=vulkan`、`--use-angle=gl` → 前者灰屏，后者窗口建不出来
+> - CPU 光栅（`--disable-gpu-rasterization`）→ 灰屏且合成器几乎停摆
+> - 窗口样式：`titleBarStyle:"hidden"` / 透明 `titleBarOverlay` / `roundedCorners`
+>   → 改了还是灰屏（已还原 asar）
+> - `--disable-gpu-memory-buffer-compositor-resources` → 灰屏
+> - Wine Wayland 驱动（`--wayland`）→ Electron 直接崩（exit 3）
 >
-> 所以最终组合是 `--disable-direct-composition --disable-gpu-compositing`，
-> 两条都留在 `scripts/wine-run-app.sh` 的 `BASE_FLAGS` 里。
->
-> 有趣的是：**LobsterAI 用同一套参数没有这个现象**（它也有 backdrop blur）。
-> 说明这是灵犀特定的合成行为触发的，不是所有 Electron 的通病——所以参数按
-> 「能同时兼容两家」来定，而不是只对一家有效。
+> 所以灵犀最终用 `--disable-direct-composition --disable-gpu-compositing`。
+
+#### 帧率：两家必须用不同的合成路径
+
+用 CDP 注入「全屏模糊层逐帧移动」做压力测试（比真实 UI 更重），实测：
+
+| 配置 | 灵犀 | 龙虾 |
+|---|---|---|
+| GPU 合成 | 灰屏（不可用） | **≈55fps** |
+| 软件合成 | **≈50fps** | ≈13fps |
+
+所以默认值按 app 分开：
+
+- **龙虾**：`--disable-direct-composition`，保留 GPU 合成 → 从 13fps 提到 55fps
+- **灵犀**：再加 `--disable-gpu-compositing` → 唯一能正常显示的路径，50-60fps
+
+`scripts/wine-run-app.sh` 里用 `if [ "$APP" = "lingxi" ]` 区分；`--gpu-compositing-on/off`
+留作诊断开关。不要为了「统一参数」把龙虾也降到软件合成。
+
+> 补充：灵犀软件合成下把光栅线程提到 8（`--num-raster-threads=8`）反而略差
+> （46fps），默认 4 就好；强制 `--enable-gpu-rasterization` 也无变化。
 
 登录后 cookie 落在
 `$WINEPREFIX/drive_c/users/<user>/AppData/Roaming/WPS 灵犀/Partitions/*/Network/Cookies`。
@@ -947,6 +965,7 @@ ln -sf ~/.local/opt/raccoon-ai/raccoon-ai ~/.local/bin/raccoon-ai
 | `scripts/wine-tune.sh` | 按社区最佳实践调优 prefix（NTSync/字体平滑/DXVK 配置） |
 | `scripts/wine-run-app.sh` | 通用启动器：`lingxi` / `lobster`，含性能与渲染参数 |
 | `scripts/wine-install-menu.sh` | 把两家写进应用菜单（.desktop + hicolor 图标，可重复执行） |
+| `scripts/patch-asar.mjs` | 在 Electron `app.asar` 里做**等长原地替换**（诊断用；必须按字节偏移） |
 | `scripts/wine-run-lingxi.sh` | 兼容入口，等价于 `wine-run-app.sh lingxi` |
 | `scripts/wine-patch-openclaw.mjs` | 给龙虾的 openclaw 网关打 chmod-EBUSY 补丁 |
 | `scripts/wine-node-shim.js` | Wine 下 Node 的 chmod 补丁（EBUSY → 无操作） |
