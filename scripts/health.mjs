@@ -40,18 +40,32 @@ function maskPhone(phone) {
 }
 
 /** 商汤小浣熊桌面端把 IAM token 写在 agent/config/auth.json（旧版在 ~/.box-agent）。 */
-function raccoonAuthFile() {
+function raccoonAuthCandidates() {
   const explicit = String(process.env.RACCOON_AUTH_FILE || '').trim();
-  if (explicit) return explicit;
-  for (const file of [
+  if (explicit) return [explicit];
+  // 与 raccoon-proxy.js 一致：非 Windows 的 agent home 在 userData 下
+  const out = [];
+  if (process.platform !== 'win32') {
+    const configRoot = process.platform === 'darwin'
+      ? path.join(HOME, 'Library', 'Application Support')
+      : process.env.XDG_CONFIG_HOME || path.join(HOME, '.config');
+    out.push(path.join(configRoot, 'office-raccoon', 'agent', 'config', 'auth.json'));
+    out.push(path.join(configRoot, 'box-agent', 'config', 'auth.json'));
+  }
+  out.push(
     path.join(HOME, '.office-raccoon', 'agent', 'config', 'auth.json'),
     path.join(HOME, '.box-agent', 'config', 'auth.json'),
-  ]) {
+  );
+  return out;
+}
+
+function raccoonAuthFile() {
+  for (const file of raccoonAuthCandidates()) {
     try {
       if (fs.statSync(file).isFile()) return file;
     } catch {}
   }
-  return path.join(HOME, '.office-raccoon', 'agent', 'config', 'auth.json');
+  return raccoonAuthCandidates()[0];
 }
 
 /** 所有已知 endpoint。加新供应商就在这里加一行。 */
@@ -193,6 +207,17 @@ const SOURCES = [
     probeModel: 'deepseek-v4.1-flash',
   },
   {
+    id: 'lobster',
+    title: '有道龙虾',
+    url: 'http://127.0.0.1:8797/v1',
+    modelsPath: '/models',
+    // 登录态在 LobsterAI 桌面端的 SQLite（kv.auth_tokens）；反代优先复用桌面端
+    // tokenProxy，桌面端退出后直连上游。体检只探反代端口与试打。
+    authFile: null,
+    // deepseek-flash 是桌面端默认的便宜模型（分时计价高峰 x0.1）
+    probeModel: 'deepseek-flash',
+  },
+  {
     id: 'gateway',
     title: '统一网关',
     url: 'http://127.0.0.1:8785/v1',
@@ -324,7 +349,20 @@ async function probeOnce(url, model, apiKey) {
     try {
       const j = JSON.parse(text);
       out = j.choices && j.choices[0] && j.choices[0].message ? j.choices[0].message.content || '' : '';
-    } catch {}
+    } catch {
+      // 有的上游即使 stream:false 也回 SSE（有道龙虾就是这样）：按 data: 行拼 delta。
+      // 只把 JSON 解析失败时才会走到这里，对别的供应商是 noop。
+      for (const line of text.split(/\r?\n/)) {
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        try {
+          const chunk = JSON.parse(payload);
+          const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
+          if (delta && typeof delta.content === 'string') out += delta.content;
+        } catch {}
+      }
+    }
     return { ok: true, ms, detail: out.trim().slice(0, 40) || '(空回复)' };
   } catch (e) {
     return { ok: false, ms: Date.now() - t0, detail: e.code || e.message };

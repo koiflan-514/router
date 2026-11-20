@@ -34,6 +34,7 @@ const SHARED = {
   models: path.join(SHARED_DIR, 'pi-models.json'),
   opencode: path.join(SHARED_DIR, 'opencode', 'opencode.json'),
   opencodeJsonc: path.join(SHARED_DIR, 'opencode', 'opencode.jsonc'),
+  opencodePlugins: path.join(SHARED_DIR, 'opencode', 'plugins'),
   wbSessions: path.join(SHARED_DIR, 'workbuddy', 'sessions'),
   wbGlobalSessions: path.join(SHARED_DIR, 'workbuddy', 'sessions-global'),
   qoderModels: path.join(SHARED_DIR, 'qoder2pi'),
@@ -586,6 +587,62 @@ function syncJsonc({ homesData, currentHome, warnings }) {
   return true;
 }
 
+/**
+ * opencode 插件目录（provider-credits 等）。
+ *
+ * 插件是**代码**，不能像账号文件那样按 mtime 做 last-write-wins——一台上的旧副本
+ * 会把新版覆盖回去。所以这里只做首次安装：目标 home 里还没有这份插件时，从共享库
+ * 拷一份过去；已经有了就完全不动，避免把用户正在改的版本覆盖掉。
+ *
+ * `~/.config/opencode/plugins/<名字>/` 会被 opencode 自动加载（实测日志里
+ * `loading plugin id=.../plugins/model-groups`），不需要往 opencode.jsonc 的
+ * `plugins` 数组里登记，也就不必去改用户手写的带注释配置。
+ */
+const PLUGIN_NAMES = ['provider-credits'];
+
+function syncPlugins({ homesData }) {
+  let installed = 0;
+  for (const name of PLUGIN_NAMES) {
+    const sharedDir = path.join(SHARED.opencodePlugins, name);
+    // 共享库里还没有这份插件时，从最先找到的 home 收上来（首次初始化）
+    if (!exists(sharedDir)) {
+      for (const h of homesData) {
+        const src = homePath(h.home, path.join('.config', 'opencode', 'plugins', name));
+        if (exists(path.join(src, 'index.ts'))) {
+          copyDir(src, sharedDir);
+          break;
+        }
+      }
+    }
+    if (!exists(sharedDir)) continue;
+    for (const h of homesData) {
+      const dest = homePath(h.home, path.join('.config', 'opencode', 'plugins', name));
+      if (exists(dest)) continue; // 不覆盖：用户可能正在改这一份
+      if (copyDir(sharedDir, dest)) installed += 1;
+    }
+  }
+  return installed;
+}
+
+/** 递归复制目录（覆盖同名文件）。插件目录只有几个文件，不追求增量。 */function copyDir(src, dest) {
+  try {
+    fs.mkdirSync(dest, { recursive: true });
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      const from = path.join(src, entry.name);
+      const to = path.join(dest, entry.name);
+      if (entry.isDirectory()) copyDir(from, to);
+      else if (entry.isFile()) {
+        // 内容一样就别写，避免每轮同步都刷新 mtime、触发 opencode 重载
+        if (exists(to) && readText(to) === readText(from)) continue;
+        fs.copyFileSync(from, to);
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function syncQoderModels({ homesData }) {
   const names = ['models-cn.json', 'models-global.json'];
   let changed = 0;
@@ -612,7 +669,7 @@ function syncQoderModels({ homesData }) {
 }
 
 function ensureDirs() {
-  for (const dir of [SHARED_DIR, path.dirname(SHARED.auth), SHARED.wbSessions, SHARED.wbGlobalSessions, path.dirname(SHARED.opencode), SHARED.qoderModels]) {
+  for (const dir of [SHARED_DIR, path.dirname(SHARED.auth), SHARED.wbSessions, SHARED.wbGlobalSessions, path.dirname(SHARED.opencode), SHARED.opencodePlugins, SHARED.qoderModels]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
@@ -693,6 +750,9 @@ export async function syncHomes({ homes = null, quiet = false } = {}) {
 
   // 5) Qoder 模型缓存
   syncQoderModels({ homesData });
+
+  // 5b) opencode 插件（代码，单向分发：共享库 → 每个 home）
+  syncPlugins({ homesData, warnings });
 
   // 6) 所有 home 写同一份 auth/models
   for (const home of activeHomes) {

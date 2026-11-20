@@ -79,16 +79,31 @@ const HOST = String(process.env.RACCOON_HOST || '127.0.0.1');
  *
  *   { "access_token": "<JWT>", "office_identity": "personal" }
  *
- * `~/.box-agent` 是旧版（OfficeV3）的 agent home，老机器上凭证在那里；
- * 两个都看，取第一个存在且带 token 的。
+ * 候选路径按平台给全，不能只写 Windows 那一条：
+ *   Windows  ~/.office-raccoon/agent/config/auth.json（桌面端默认 agent home）
+ *            ~/.box-agent/config/auth.json（旧版 OfficeV3）
+ *   Linux/macOS 桌面端把 agent home 放在 Electron 的 userData 下：
+ *            ~/.config/office-raccoon/agent/config/auth.json
+ *            ~/Library/Application Support/office-raccoon/agent/config/auth.json
+ * 只认前两条时，Linux 上装了桌面端也会一直报「未登录」。
  */
 function authCandidates() {
   const explicit = String(process.env.RACCOON_AUTH_FILE || '').trim();
   if (explicit) return [explicit];
-  return [
+  const out = [];
+  if (process.platform !== 'win32') {
+    const configRoot = process.platform === 'darwin'
+      ? path.join(HOME, 'Library', 'Application Support')
+      : process.env.XDG_CONFIG_HOME || path.join(HOME, '.config');
+    out.push(path.join(configRoot, 'office-raccoon', 'agent', 'config', 'auth.json'));
+    // Linux 上桌面端也可能用 .box-agent 作为 harness home
+    out.push(path.join(configRoot, 'box-agent', 'config', 'auth.json'));
+  }
+  out.push(
     path.join(HOME, '.office-raccoon', 'agent', 'config', 'auth.json'),
     path.join(HOME, '.box-agent', 'config', 'auth.json'),
-  ];
+  );
+  return out;
 }
 
 function authFile() {

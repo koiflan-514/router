@@ -1,17 +1,19 @@
 # AI 编程订阅 → 本地路由：经验手册
 
-把 Qoder、Trae、WorkBuddy、CodeArts、ZCode、Loomy、商汤小浣熊、千问办公、百度搭子、WPS 灵犀的订阅额度路由到 pi 与 opencode。
+把 Qoder、Trae、WorkBuddy、CodeArts、ZCode、Loomy、商汤小浣熊、千问办公、百度搭子、WPS 灵犀、有道龙虾的订阅额度路由到 pi 与 opencode。
 本目录两件事：**反代进程控制器**（`router.mjs`）+ **踩过的坑与判断依据**（`docs/`）。
 provider 接入的实现代码已经整合到 `integrations/`（qodbuddy2pi、traework2api、
 codearts2api、zcode-bridge、loomy2api、raccoon2api、qwenwork2api、dumate2api、
-lingxi2api），本目录是一个单独的 git 仓库。第三方来源与许可见
+lingxi2api、lobsterai2api），本目录是一个单独的 git 仓库。第三方来源与许可见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-`router.mjs` 现在**直接启动、停止、重启、探活全部十二家反代**：Qoder、WorkBuddy、
-Trae、CodeArts、ZCode、Loomy、商汤小浣熊、千问办公、百度搭子、WPS 灵犀都归它管，不再依赖各家的安装脚本来拉起进程。PID、日志与端口清理由
+`router.mjs` 现在**直接启动、停止、重启、探活全部十三家反代**：Qoder、WorkBuddy、
+Trae、CodeArts、ZCode、Loomy、商汤小浣熊、千问办公、百度搭子、WPS 灵犀、有道龙虾都归它管，不再依赖各家的安装脚本来拉起进程。PID、日志与端口清理由
 router 自己维护（见 [docs/09-lifecycle.md](docs/09-lifecycle.md)）。WPS 灵犀（`lingxi`）走官方
 app-server JSON-RPC（stdio）接对话，注意它是完整 agent、不吐 OpenAI tool_calls，
 适合对话不适合编码驱动，详见 [integrations/lingxi2api](integrations/lingxi2api/README.md)。
+有道龙虾（`lobster`）优先复用桌面端自己的 tokenProxy（刷新与用量归它），桌面端退出后
+直连上游，积分与签到见 [integrations/lobsterai2api](integrations/lobsterai2api/README.md)。
 
 ```
 本地客户端 / 官方 openapi         本机路由层                消费端
@@ -26,13 +28,14 @@ Loomy (讯飞 iModel)        ──► loomy-proxy    :8791 ──► pi / openc
 千问办公 (OpenAI+Anthropic) ──► qwenwork-proxy :8794 ──► pi / opencode
 百度搭子 (OpenAI 兼容)      ──► dumate-proxy   :8795 ──► pi / opencode
 WPS 灵犀 (app-server RPC)   ──► lingxi-proxy   :8796 ──► pi / opencode
+有道龙虾 (LobsterAI)        ──► lobster-proxy  :8797 ──► pi / opencode
                                      ▲
-                                     │ 可选：统一网关（:8785）把上面十二家拼成
+                                     │ 可选：统一网关（:8785）把上面十三家拼成
                                      │ 一个端口 + 双协议 + 跨供应商转移
                              router-gateway ──► Claude Code / opencode / pi
 ```
 
-十二家模型反代各自有端口，客户端可以直接连（上文那种用法），也可以连**统一网关**：
+十三家模型反代各自有端口，客户端可以直接连（上文那种用法），也可以连**统一网关**：
 一个 baseURL、模型名带供应商前缀、某家挂了自动换家。网关是叠加层，不替代任何一家。
 WPS 灵犀也在网关里，但它不吐 tool_calls——编码 agent 的降级链别把它排进去。
 
@@ -59,7 +62,7 @@ WPS 灵犀也在网关里，但它不吐 tool_calls——编码 agent 的降级�
 | [docs/13-limits.md](docs/13-limits.md) | **本机限流：为什么限、四个维度、三档预设、硬约束、三层生效范围** |
 | [docs/06-reuse.md](docs/06-reuse.md) | 怎么把这套经验套到新的供应商上 |
 | [scripts/health.mjs](scripts/health.mjs) | 一键体检：端口、模型数、凭证有效期、端到端试打 |
-| [scripts/pi-models.mjs](scripts/pi-models.mjs) | **把全部上游写进 pi 的 `models.json`：本机十二家 + `router-gateway` + 免费供应商（写前备份）** |
+| [scripts/pi-models.mjs](scripts/pi-models.mjs) | **把全部上游写进 pi 的 `models.json`：本机十三家 + `router-gateway` + 免费供应商（写前备份）** |
 | [scripts/lib/pi-sync.mjs](scripts/lib/pi-sync.mjs) | pi 模型表的唯一写入点：读改写 / 备份 / 合并 / 删除，网关与免费供应商的 provider 构造 |
 | [scripts/verify-all.sh](scripts/verify-all.sh) | provider × 两个客户端全量实测 |
 | [check.sh](check.sh) | 上面两个的组合入口 |
@@ -97,9 +100,10 @@ node router.mjs login dumate     # 拉起百度搭子桌面端并等它写回登
 node router.mjs up dumate        # 启动百度搭子反代（:8795）
 node router.mjs up lingxi        # 启动 WPS 灵犀反代（:8796，对话 + 智点余额）
 curl -s http://127.0.0.1:8796/v1/quota    # 查灵犀智点余额
-node router.mjs sync             # 让 opencode 的 provider 与开关一致
+node router.mjs up lobster       # 启动有道龙虾反代（:8797，对话 + 积分/签到）
+curl -s http://127.0.0.1:8797/v1/quota    # 查龙虾积分包、签到状态与倍率node router.mjs sync             # 让 opencode 的 provider 与开关一致
 node router.mjs models           # 按上游 /v1/models 刷新 opencode 的模型清单
-node scripts/pi-models.mjs       # 让 pi 的 models.json 跟上：十二家反代 + router-gateway + 免费供应商
+node scripts/pi-models.mjs       # 让 pi 的 models.json 跟上：十三家反代 + router-gateway + 免费供应商
 node scripts/pi-models.mjs gateway   # 只写统一网关（一个 baseURL，模型名带供应商前缀）
 node scripts/pi-models.mjs free      # 只写免费供应商（有 key / 本机免账号的那些）
 node router.mjs up               # 按当前开关启动全部反代
@@ -194,6 +198,10 @@ node router.mjs models              # 全部已开启的；也可指定 id：mod
 来自 pi 扩展。注意 `node router.mjs sync` **不会**刷新模型——它只在 provider 不存在时写入，
 已存在就跳过（这正是 ZCode 长期只显示 1 个模型的原因）。
 
+`/v1/models` 需要桌面端登录态的那些家（Loomy、小浣熊、灵犀、龙虾）在未登录时回 401，
+这时 `sync` 会退到 pi 模型表里的快照写 provider，选择器里至少不是空的；登录后再跑
+`models` 换成实时目录。
+
 需要分来源手工刷新时：
 
 ```bash
@@ -230,16 +238,19 @@ node router.mjs sync-homes --homes "C:\Users\Administrator;D:\Users\demo"   # �
 - **Qoder**：每个区域只有一条凭证；首次同步固定为当时账号，之后同一 `userID` 自动
   续期。明确重新登录会更新共享账号，另一套系统里的旧备份不会把账号换回去。
 - **opencode / pi models / Qoder 模型缓存**：以最新修改的一份为准，写回所有 home。
+- **opencode 插件**（`~/.config/opencode/plugins/provider-credits`）：代码不做 mtime
+  合并。首次在某台机器上跑同步时从共享库装一份；已有就**不覆盖**，避免把正在改的版本
+  冲掉。要升级就手工替换那一份（或在改动后删掉它让同步重装）。
 - 所有被覆盖的文件都会留 `.bak-sync-<时间>` 备份。
 
-十二家均已接入（ZCode、Loomy、小浣熊、千问办公、百度搭子、WPS 灵犀需登录后才有模型）。最近一次完整 API 实测覆盖 5 家 provider × 2 客户端 + 工具调用；
+十三家均已接入（ZCode、Loomy、小浣熊、千问办公、百度搭子、WPS 灵犀、有道龙虾需登录后才有模型）。最近一次完整 API 实测覆盖 5 家 provider × 2 客户端 + 工具调用；
 CodeArts 已单独验证 `/v1/models` 与 opencode 写入。跑全量前先 `node router.mjs all`。
 
 ## 反代进程归 router 管
 
 | 能力 | 命令 | 说明 |
 |---|---|---|
-| 启停 | `up` / `down` / `restart` | 十二家模型反代统一走 spawn；带 `id` 只动这几家 |
+| 启停 | `up` / `down` / `restart` | 十三家模型反代统一走 spawn；带 `id` 只动这几家 |
 | 浏览器登录 | `login [id...] [--force]` | 缺凭证时打开浏览器；交互式 `up/all` 默认自动尝试 |
 | 看状态 | `list` / `status` | 开关、端口、PID、登录态、opencode、模型数 |
 | 账号切换 | `account [id] [账号]` | 列出/切换 WorkBuddy、CodeArts、Trae 的账号；`--all` 恢复整池、`--dry-run` 只预览 |
@@ -261,7 +272,7 @@ CodeArts 已单独验证 `/v1/models` 与 opencode 写入。跑全量前先 `nod
 
 ### 统一网关（可选）
 
-十二家各自是独立端口、各自一套模型清单。**网关把它们拼成一个端口**，客户端只配一次：
+十三家各自是独立端口、各自一套模型清单。**网关把它们拼成一个端口**，客户端只配一次：
 
 ```bash
 node router.mjs gateway up          # 起网关（:8785）
@@ -284,9 +295,9 @@ curl -s http://127.0.0.1:8785/v1/models | head -c 300
 - **工具调用配对修复**：一段「有 tool_use 没有 tool_result」的历史会让上游 400，而且
   因为历史不变，之后每一轮都 400。网关在收口上修一次。
 
-### 免费供应商（叠加在 12 家之上）
+### 免费供应商（叠加在 13 家之上）
 
-除了 12 家本机反代，网关还能接入 **18 家免费供应商**：
+除了 13 家本机反代，网关还能接入 **18 家免费供应商**：
 
 ```bash
 node router.mjs providers list              # 看状态
@@ -300,7 +311,7 @@ node router.mjs providers test openrouter
 | 有免费额度 | 15 | 是 | OpenRouter、OpenCode Zen、Gemini、NVIDIA NIM |
 
 它们**不进 `PROVIDERS`**（那张表是「spawn 什么进程」），而是由网关直接当作上游。
-配好 key 之后，模型名同样是 `<供应商>/<模型>`，可以和 12 家混在一条降级链里：
+配好 key 之后，模型名同样是 `<供应商>/<模型>`，可以和 13 家混在一条降级链里：
 
 ```bash
 node router.mjs gateway combo add --name free \
@@ -309,7 +320,7 @@ node router.mjs gateway combo add --name free \
 
 key 不写进 `config.json`，单独放 `gateway/data/providers.json` 并 AES-256-GCM 加密。
 
-网关是**叠加层**，不替代任何一家反代：十二家的进程、账号、登录仍由 router 管。
+网关是**叠加层**，不替代任何一家反代：十三家的进程、账号、登录仍由 router 管。
 完整说明（调度公式、失败分类、密钥、配置、观测端点）见 [gateway/README.md](gateway/README.md)。
 
 ### 登录
@@ -333,7 +344,9 @@ node router.mjs login workbuddy --force   # 强制重新登录
 | Loomy | 无命令行登录：`router login loomy` 会拉起桌面端并等它写回 `auth-session.json` |
 | 商汤小浣熊 | 无命令行登录：`router login raccoon` 会拉起桌面端并等它写回 `agent/config/auth.json` 的 IAM token |
 | 千问办公 | 无命令行登录：`router login qwenwork` 会拉起桌面端；登录后**必须在对话里发一句**，桌面端才会签发 `engine-maas-key.dat` |
+| 百度搭子 | 无命令行登录：`router login dumate` 拉起桌面端并等它写回 `auth.json` |
 | WPS 灵犀 | 无命令行登录：在 WPS 灵犀桌面端登录，SID 写进 Electron cookie 库后反代自动读到 |
+| 有道龙虾 | 无命令行登录：在 LobsterAI 桌面端登录，凭据写进桌面的 SQLite，反代自动读到 |
 
 ## 两个客户端各自怎么接
 
@@ -345,16 +358,25 @@ node router.mjs login workbuddy --force   # 强制重新登录
 |---|---|---|
 | `qoder` / `qoder-cn` | 扩展 `pi-provider-qoder`（私有协议直连，不经反代） | `pi install integrations/qodbuddy2pi/assets/vendor/pi-provider-qoder` |
 | `workbuddy` / `workbuddy-global` | 扩展 `~/.pi/agent/extensions/workbuddy.ts`（读桌面端产品配置） | 拷过去 + `node integrations/qodbuddy2pi/assets/workbuddy2pi ensure-auth-key` |
-| `trae-local` / `codearts` / `zcode` / `loomy` / `raccoon` / `qwenwork` / `dumate` / `lingxi` | `~/.pi/agent/models.json` | `node scripts/pi-models.mjs [id] [--dry-run]` |
+| `trae-local` / `codearts` / `zcode` / `loomy` / `raccoon` / `qwenwork` / `dumate` / `lingxi` / `lobster` | `~/.pi/agent/models.json` | `node scripts/pi-models.mjs [id] [--dry-run]` |
 | `router-gateway` | 统一网关的 pi provider（模型名 `<供应商>/<模型>` + combo） | `node scripts/pi-models.mjs gateway` 或 `node router.mjs gateway install` |
 | 免费供应商（18 家中有 key / 本机免账号的） | 每家一个直连 provider，与 opencode 同口径 | `node scripts/pi-models.mjs free` 或 `node router.mjs providers install` |
 
 `pi-models.mjs` 从各家 `/v1/models` 拉清单、带上 `apiKey`（Trae 取
 `integrations/traework2api/.env.local`，CodeArts 取它自己签发的 `sk-ca-...`，
-ZCode / Loomy / 小浣熊用占位 key——本机回环不校验）与 `compat`，别的 provider（如 `TokenPlus`）
+ZCode / Loomy / 小浣熊 / 有道龙虾用占位 key——本机回环不校验）与 `compat`，别的 provider（如 `TokenPlus`）
 原样保留，写前备份到 `~/.pi/agent/models.backups/`。Qoder 与 WorkBuddy 会被它
 主动跳过并说明原因。`router gateway install` 与 `providers install` 走同一份
 写入实现（`scripts/lib/pi-sync.mjs`），所以两条路不会互相覆盖。
+
+### 在 opencode 里看积分
+
+`~/.config/opencode/plugins/provider-credits/` 是一个只读插件：状态栏显示当前模型的
+倍率与余额，侧边栏与 `/credits` 面板按显示宽度对齐列余额与逐模型倍率，另有
+`credits` 工具供 agent 查询。它直连本机反代（`/v1/quota`、`/admin/api/credits`）与
+官方只读接口，不保存新凭据、不签到（除非显式 `checkin:true`）。覆盖十三家里能查余额
+的每一家：Trae、CodeArts、WorkBuddy 国内/国际、Qoder 国内/国际、Loomy、小浣熊、
+千问办公、百度搭子、WPS 灵犀、有道龙虾、ZCode。拿不到的来源会写明原因，不用估算值冒充。
 
 ## Git
 
@@ -390,22 +412,23 @@ git diff --cached --stat
    `429 Retry-After: 30` + 一句人话。**任何「等很久然后什么都没发生」的故障，
    优先怀疑中间层在等一个永远不会来的响应。**
 
-## 现状快照（2026-11-19）
+## 现状快照（2026-11-20）
 
 | 来源 | provider | 端口 | pi | opencode | 备注 |
 |---|---|---|---|---|---|
 | Qoder 国内版 | `qoder-cn` | 8789 | ✓ 12 | ✓ 13 | Free 套餐 + 加购额度；pi 不列 Auto，opencode 会列；免费号按并发排队（10605） |
 | Qoder 国际版 | `qoder` | 8790 | ✓ 1 | ✓ 12 | 套餐只启用 1 个模型；opencode 走代理目录，会把 12 个都列出来 |
 | Trae | `trae-local` | 7863 | ✓ 31 | ✓ 31 | 第三方反代 |
-| WorkBuddy 国内版 | `workbuddy` | 8787 | ✓ 30 | ✓ 30 | 反代 2.0.7；已剔除 11102/11150 的 5 个失效条目 |
-| WorkBuddy 国际版 | `workbuddy-global` | 8788 | ✓ 10 | ✓ 10 | 反代 2.0.7 + 端点修正；只保留当前免费账号能调通的模型 |
+| WorkBuddy 国内版 | `workbuddy` | 8787 | ✓ 30 | ✓ 35 | 反代 2.0.7；已剔除 11102/11150 的 5 个失效条目 |
+| WorkBuddy 国际版 | `workbuddy-global` | 8788 | ✓ 10 | ✓ 21 | 反代 2.0.7 + 端点修正；只保留当前免费账号能调通的模型 |
 | CodeArts Agent | `codearts` | 10087 | ✓ 12 | ✓ 12 | 第三方 Go 网关，全部扣积分 |
 | ZCode (Z.ai) | `zcode` | 20131 | ✓ 6 | ✓ 6 | zcode-bridge（MIT）；用桌面端凭据 |
-| Loomy（讯飞） | `loomy` | 8791 | ✓ 6 | — | 本仓库自写反代；账号已被停用，opencode 侧暂未写入 |
-| 商汤小浣熊 | `raccoon` | 8793 | ✓ 10 | ✓ 10 | 本仓库自写反代；读桌面端 IAM token，上游本来就吐 OpenAI |
+| Loomy（讯飞） | `loomy` | 8791 | ✓ 6 | ✓ 6 | 本仓库自写反代；账号已被停用，opencode 侧用 pi 模型表兜底 |
+| 商汤小浣熊 | `raccoon` | 8793 | ✓ 10 | ✓ 9 | 本仓库自写反代；读桌面端 IAM token，上游本来就吐 OpenAI |
 | 千问办公 | `qwenwork` | 8794 | ✓ 13 | ✓ 13 | 本仓库自写反代；解 Electron OSCrypt 读 MaaS key 并自续期，原生双方言 |
 | 百度搭子 | `dumate` | 8795 | ✓ 23 | ✓ 23 | 本仓库自写反代；main-server 端口每次启动随机，模型目录读桌面端落盘的 opencode.json |
 | WPS 灵犀 | `lingxi` | 8796 | ✓ 13 | ✓ 13 | 本仓库自写反代；spawn 官方 app-server（JSON-RPC stdio），从 Electron cookie 库解 wps_sid；agent 形态不吐 tool_calls |
-| 统一网关 | `router-gateway` | 8785 | ✓ 168 | ✓ 168 | 十二家并集 + combo；由 `gateway install` 写入 |
+| 有道龙虾 | `lobster` | 8797 | ✓ 23 | ✓ 23 | 本仓库自写反代；读桌面端 SQLite 登录态，优先复用桌面端 tokenProxy；积分包 + 签到 + 倍率 |
+| 统一网关 | `router-gateway` | 8785 | ✓ 159 | ✓ 159 | 十三家并集 + combo；由 `gateway install` 写入 |
 
 实时状态跑 `node scripts/health.mjs`。

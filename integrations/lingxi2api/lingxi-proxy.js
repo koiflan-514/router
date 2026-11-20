@@ -69,14 +69,132 @@ function appDataRoot() {
     const roaming = process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming');
     return path.join(roaming, 'WPS 灵犀');
   }
-  return path.join(HOME, '.config', 'WPS 灵犀');
+  const native = path.join(HOME, '.config', 'WPS 灵犀');
+  // 官方只发 Windows 版；Linux 上用 Wine 跑时，登录态在 Wine prefix 的
+  // AppData\Roaming\WPS 灵犀 下。原生目录优先，Wine 作为退路。
+  try {
+    const { candidateDirs, firstExistingDir } = require('../wine-paths.js');
+    const hit = firstExistingDir(
+      candidateDirs({ explicitEnv: 'LINGXI_APP_DATA', nativeDir: native, productNames: ['WPS 灵犀'] }),
+    );
+    if (hit) return hit.dir;
+  } catch {}
+  return native;
 }
 
 const APP_DATA = appDataRoot();
-const APP_SERVER_EXE = String(process.env.LINGXI_APP_SERVER || '')
-  || path.join(APP_DATA, 'app_server_link', 'service', 'lingxi.exe');
+
+/**
+ * 定位 app-server 可执行文件。
+ *
+ * 两种布局都要认（实测都会出现）：
+ *   app_server_link/service/lingxi.exe          → Windows 上桌面端建的符号链接
+ *   app_server_<版本>/service/lingxi.exe        → 链接建不起来时（Wine）保留的真实目录
+ * Wine 里符号链接常常建不成，桌面端会留下一个空的 `app_server_link`，
+ * 只认前者就会报「找不到 app-server」。
+ */
+function locateAppServer() {
+  const explicit = String(process.env.LINGXI_APP_SERVER || '').trim();
+  if (explicit) return explicit;
+
+  const direct = path.join(APP_DATA, 'app_server_link', 'service', 'lingxi.exe');
+  try {
+    if (fs.statSync(direct).isFile()) return direct;
+  } catch {}
+
+  // 退到版本目录，取版本号最大的那个（多版本并存时用最新的）
+  try {
+    const versions = fs
+      .readdirSync(APP_DATA)
+      .filter((n) => /^app_server_\d/.test(n))
+      .sort((a, b) => {
+        const va = a.replace(/^app_server_/, '').split('.').map(Number);
+        const vb = b.replace(/^app_server_/, '').split('.').map(Number);
+        for (let i = 0; i < Math.max(va.length, vb.length); i += 1) {
+          const d = (va[i] || 0) - (vb[i] || 0);
+          if (d !== 0) return d;
+        }
+        return 0;
+      })
+      .reverse();
+    for (const v of versions) {
+      const p = path.join(APP_DATA, v, 'service', 'lingxi.exe');
+      try {
+        if (fs.statSync(p).isFile()) return p;
+      } catch {}
+    }
+  } catch {}
+  return direct;
+}
+
+const APP_SERVER_EXE = locateAppServer();
 const APP_SERVER_CONFIG = path.join(APP_DATA, 'app-server-data', 'config.json');
 const APP_SERVER_DATA = path.join(APP_DATA, 'app-server-data', 'state');
+
+/**
+ * 官方只发 Windows 版 app-server（lingxi.exe 是 PE）。Linux 上只能靠 Wine 跑，
+ * 所以这里要把「Linux 路径 + 原生 spawn」翻译成「Windows 路径 + wine 命令」。
+ *
+ * 两个坑：
+ *  1. Wine 只认 Windows 路径：prefix 里的文件要写成 C:\...，prefix 外的走 Z:\。
+ *  2. Wine 的 prefix 必须显式指定（WINEPREFIX），否则它会用 ~/.wine，
+ *     而桌面端和反代必须共享**同一个** prefix —— DPAPI 密钥只在该 prefix 内有效。
+ */
+
+/** 跑 .exe 用的 Wine 命令。显式 LINGXI_WINE 优先（可带参数），默认系统 wine。 */
+function wineCommand() {
+  const explicit = String(process.env.LINGXI_WINE || '').trim();
+  if (explicit) return explicit.split(/\s+/);
+  return ['wine'];
+}
+
+/**
+ * 当前 prefix 的根。
+ *
+ * 优先显式 WINEPREFIX；否则用本项目的专用 prefix（`~/.local/share/wineprefixes/lingxi`），
+ * 最后回落到 `~/.wine`。专用 prefix 的好处：不污染默认 prefix，也便于整个目录备份/迁移。
+ */
+function winePrefix() {
+  const env = String(process.env.WINEPREFIX || '').trim();
+  if (env) return env;
+  const dedicated = path.join(HOME, '.local/share/wineprefixes/lingxi');
+  try {
+    if (fs.statSync(path.join(dedicated, 'drive_c')).isDirectory()) return dedicated;
+  } catch {}
+  return path.join(HOME, '.wine');
+}
+
+/** Linux 绝对路径 → Wine 眼里的 Windows 路径。 */
+function toWinePath(unixPath) {
+  const resolved = path.resolve(unixPath);
+  const prefix = path.resolve(winePrefix());
+  const driveC = path.join(prefix, 'drive_c');
+  const rel = path.relative(driveC, resolved);
+  if (rel && !rel.startsWith('..')) {
+    return `C:\\${rel.split(path.sep).join('\\')}`;
+  }
+  return `Z:${resolved.split(path.sep).join('\\')}`;
+}
+
+/**
+ * 拼出启动 app-server 的 { command, args }。
+ *
+ * Windows 上就是直接跑 exe；Linux 上改成 `wine <exe> ...`，而参数里的
+ * 配置/数据目录也要换成 Windows 路径，否则 app-server 会往 Z:\ 里找不存在的文件。
+ */
+function appServerSpawn() {
+  const args = ['--stdin', '--auth-storage=runtime'];
+  if (fs.existsSync(APP_SERVER_CONFIG)) args.push('--config', toWinePath(APP_SERVER_CONFIG));
+  args.push('--data-dir', toWinePath(APP_SERVER_DATA));
+
+  if (WIN) return { command: APP_SERVER_EXE, args };
+
+  const wine = wineCommand();
+  return {
+    command: wine[0],
+    args: [...wine.slice(1), toWinePath(APP_SERVER_EXE), ...args],
+  };
+}
 
 // ---------------------------------------------------------------- 小工具
 
@@ -123,12 +241,31 @@ function round2(value) {
 
 const sidCache = { sid: '', at: 0, source: '', error: '' };
 
+/**
+ * 解开 Local State 里的 `os_crypt.encrypted_key`，拿到 Chromium 的 cookie 主密钥。
+ *
+ * 三条路，按平台挑：
+ *   1. Windows 原生：powershell 调 ProtectedData.Unprotect（原来的做法）
+ *   2. Linux + Wine：Wine 没有可用的 powershell（`fixme:powershell:wmain stub`），
+ *      改用一个交叉编译的小 PE（`wine-dpapi.exe`）在同一个 prefix 里调
+ *      CryptUnprotectData —— 它和桌面端在同一个 Wine 用户下，DPAPI 主密钥一致。
+ *   3. mac/Linux 原生客户端：cookie 是 `v10` + 固定派生密钥，不需要 DPAPI。
+ */
 function windowsMasterKey() {
   const state = readJson(path.join(APP_DATA, 'Local State'));
   const b64 = state && state.os_crypt && state.os_crypt.encrypted_key;
   if (typeof b64 !== 'string' || !b64) return null;
+
   let blob = Buffer.from(b64, 'base64');
   if (blob.subarray(0, 5).toString('latin1') === 'DPAPI') blob = blob.subarray(5);
+
+  // 2) Wine：用随仓库分发的 windows-dpapi 小工具（见 integrations/lingxi2api/tools）
+  if (!WIN) {
+    const key = keyViaWineTool(path.join(APP_DATA, 'Local State'));
+    if (key) return key;
+  }
+
+  // 1) 原生 Windows
   const script = [
     'Add-Type -AssemblyName System.Security',
     `$b=[Convert]::FromBase64String('${blob.toString('base64')}')`,
@@ -141,6 +278,32 @@ function windowsMasterKey() {
   if (r.status !== 0) return null;
   const key = Buffer.from(String(r.stdout || '').trim(), 'base64');
   return key.length === 32 ? key : null;
+}
+
+/**
+ * 在 Wine 里跑 windows-dpapi.exe 解出主密钥。
+ *
+ * 为什么需要它：Wine 自带 crypt32 的 DPAPI 实现，但 Electron 的 Local State
+ * 是**同一个 prefix 内**加密的，所以用同一个 prefix 里的 wine 去解就能对上。
+ * powershell 在 Wine 里是空壳，只能走这个原生 PE。
+ */
+function keyViaWineTool(localStatePath) {
+  const tool = path.join(__dirname, 'tools', 'windows-dpapi.exe');
+  if (!fs.existsSync(tool)) return null;
+  const wine = wineCommand();
+  try {
+    const r = spawnSync(wine[0], [...wine.slice(1), tool, localStatePath], {
+      encoding: 'utf8',
+      timeout: 90_000,
+      env: { ...process.env, WINEPREFIX: winePrefix() },
+    });
+    if (r.status !== 0) return null;
+    const lines = String(r.stdout || '').trim().split('\n').filter(Boolean);
+    const key = Buffer.from(lines[lines.length - 1].trim(), 'base64');
+    return key.length === 32 ? key : null;
+  } catch {
+    return null;
+  }
 }
 
 function decryptCookie(buf, key) {
@@ -342,12 +505,19 @@ class AppServer {
     this.nextId = 1;
     this.pending.clear();
 
-    this.child = spawn(APP_SERVER_EXE, [
-      '--stdin', '--auth-storage=runtime',
-      '--config', APP_SERVER_CONFIG,
-      '--data-dir', APP_SERVER_DATA,
-    ], {
-      env: { ...process.env, LINGXI_WPS_SID: auth.sid },
+    const exec = appServerSpawn();
+    this.child = spawn(exec.command, exec.args, {
+      env: {
+        ...process.env,
+        LINGXI_WPS_SID: auth.sid,
+        WINEPREFIX: winePrefix(),
+        // 关掉 Wine 调试通道：app-server 本身不渲染，但 fixme/warn 的字符串格式化
+        // 仍要走一遍，长时间跑会积成可观的开销。
+        WINEDEBUG: process.env.WINEDEBUG || '-all',
+        // 同步原语交给 NTSync（Wine 10.16+ 默认，内核 6.14+ 有 /dev/ntsync）。
+        // 只在没有 NTSync 时才退回 FSync——两者互斥，不能同时设。
+        ...(fs.existsSync('/dev/ntsync') ? {} : { WINEFSYNC: '1' }),
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });

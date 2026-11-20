@@ -6,7 +6,7 @@
  * 那两个入口。三处共用 `scripts/lib/pi-sync.mjs` 落盘（写前备份、内容没变就不写）。
  *
  * 覆盖三层：
- *   1. 本机八家反代（trae-local / codearts / zcode / loomy / raccoon / qwenwork / dumate / lingxi）
+ *   1. 本机九家反代（trae-local / codearts / zcode / loomy / raccoon / qwenwork / dumate / lingxi / lobster）
  *      从各自 `/v1/models` 拉实时清单，连同鉴权 key 与 compat 一起写；
  *   2. `router-gateway`：一个 baseURL（:8785），模型名 `<供应商>/<模型>` + combo 虚拟模型；
  *   3. 免费供应商（18 家里有 key / 本机免账号的那些）：每家一个直连 provider。
@@ -24,7 +24,7 @@
  *   `workbuddy` / `workbuddy-global` → 扩展 workbuddy.ts。
  *     反代的 /v1/models 是包作者猜的静态表，服务端会回 11102 service info not
  *     found；扩展读的是桌面端落盘的产品配置，那份才是真实可用集。
- * 剩下 `trae-local`、`codearts`、`zcode`、`loomy`、`raccoon`、`qwenwork`、`dumate`、`lingxi` 没有扩展，
+ * 剩下 `trae-local`、`codearts`、`zcode`、`loomy`、`raccoon`、`qwenwork`、`dumate`、`lingxi`、`lobster` 没有扩展，
  * 才走本脚本。
  *
  * 只读各家的 `/v1/models`，只写 pi 的 models.json（写前备份到 models.backups/）。
@@ -188,6 +188,14 @@ function sources() {
       apiKey: 'lingxi-local',
       map: mapLingxi,
     },
+    {
+      id: 'lobster',
+      port: 8797,
+      name: '有道龙虾（LobsterAI）',
+      // 反代不校验入站 key，但 pi 的 OpenAI 兼容层要求非空
+      apiKey: 'lobster-local',
+      map: mapLobster,
+    },
   ];
 }
 
@@ -325,6 +333,14 @@ function mapLingxi(raw) {
     contextWindow: POSITIVE(raw.context_window),
     maxTokens: POSITIVE(raw.max_output_tokens),
   });
+}
+
+/**
+ * 有道龙虾的 /v1/models 与小浣熊同形状：context_window / capabilities{vision,reasoning}。
+ * 两个虚拟档位（yd-fast / yd-ultra）也带 context_window=400000，照常写入。
+ */
+function mapLobster(raw) {
+  return mapRaccoon(raw);
 }
 
 async function fetchModels(src, timeout = 8000) {

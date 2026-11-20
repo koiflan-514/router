@@ -356,6 +356,12 @@ curl -s http://127.0.0.1:8793/v1/models
 旧版（OfficeV3）的 agent home 是 `~/.box-agent`，老机器上凭证在那里；代理两个都看。
 桌面端重新登录后不需要重启反代。
 
+**Linux/macOS 的路径不一样**（实测 2026-11）：桌面端把 agent home 放在 Electron 的
+userData 下，也就是 `~/.config/office-raccoon/agent/config/auth.json`
+（macOS 是 `~/Library/Application Support/office-raccoon/...`）。
+早先代理只认 `~/.office-raccoon` 与 `~/.box-agent`，在 Linux 上装了、登了也一直报
+「未登录」——现在 `authCandidates()` 会把 userData 路径排在前面，两个平台都能认。
+
 **端点映射：**
 
 | 本机 | 上游 |
@@ -534,6 +540,56 @@ curl -s 'http://127.0.0.1:8796/v1/usage?limit=10'   # 收支明细
 - opencode/pi 的 credits 插件已接入灵犀：显示 `Lingxi 1897/1900 100%`，
   列出 4 个赠送智点包与最近到期时间。
 
+## 有道龙虾（LobsterAI）
+
+反代在 `integrations/lobsterai2api`（本仓库自写，零依赖 Node，端口 8797）。
+桌面端本身已经有一条本地模型代理：Electron 主进程在随机端口（当前 58375）上起
+`tokenProxy`，把 `/v1/chat/completions` 转发到
+`https://lobsterai-server.youdao.com/api/proxy/v1/chat/completions`，并负责 access
+token 刷新与用量上报。所以反代**优先复用它**，桌面端退出后才用 SQLite 里的
+access token 直连上游。
+
+```bash
+node router.mjs up lobster            # 启动（对话 + 积分 + 签到）
+node router.mjs login lobster         # 打开 LobsterAI 桌面端登录
+node router.mjs logs lobster 80       # 看日志
+
+curl -s http://127.0.0.1:8797/health
+curl -s http://127.0.0.1:8797/v1/models
+curl -s http://127.0.0.1:8797/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"deepseek-flash","messages":[{"role":"user","content":"你好"}],"stream":true}'
+curl -s http://127.0.0.1:8797/v1/quota     # 积分包 + 签到状态 + 逐模型倍率
+curl -s -X POST http://127.0.0.1:8797/v1/checkin   # 签到（今天已签会回「今日已签到」）
+```
+
+**登录态**：`%APPDATA%\LobsterAI\lobsterai.sqlite` 的 `kv.auth_tokens` /
+`kv.auth_user`，由桌面端写入。反代只读，不写回；refresh 只在内存里发生。读 SQLite
+用 Node 22.5+ 的 `node:sqlite`，没有它时对话仍可用（桌面端代理在跑时），但
+`/v1/quota` 会明确报「读不到凭据」。
+
+**桌面端代理**：端口与入站 token 在 `openclaw/loopback-state.json` 的
+`ports.tokenProxy` / `proxyToken`。这个端口**每次启动可能变**，反代每次请求前重读；
+连不上就落回直连上游。
+
+**积分**：`/api/subscription` 给积分包（`boostCreditsRemaining`，含新订阅活动、
+每日登录奖励）、套餐月度额度与奖励额度。反代把「本轮积分包总量 + 月度上限 + 奖励上限」
+记为 `total`，试用额度不重复相加。签到状态来自活动接口
+`/api/client-activities/slot` → `/<activity>/context`，今天已签时 `claimed:true`。
+
+**倍率**：`/api/models/available` 的 `costMultiplier`，分时计价与限时免费已经算进
+`effective`；`limitedFreeActive` 为真时显示 `x0.00 · 限时免费`。
+
+**注意：**
+
+- `yd-fast` / `yd-ultra` 是桌面端的虚拟档位，不是上游真实模型 id；反代转发前会先调
+  `/api/models/<id>/resolve` 换真实模型，解析失败直接报错。
+- 上游当前对 `/v1/chat/completions` **总是回 SSE**（即使 `stream:false`），与桌面端
+  行为一致；编码 agent 都走流式，不受影响。
+- 签到会真实领取积分，`/v1/checkin` 只在 credits 插件明确 `checkin:true` 时被调用；
+  该接口幂等，重复调用返回「今日已签到」。
+- opencode/pi 的 credits 插件已接入：显示 `Lobster 1099.97/1100 100%`，列出两个
+  积分包（新订阅活动 / 每日登录奖励）与签到状态。
+
 ## Qoder
 
 ```bash
@@ -583,6 +639,354 @@ workbuddy2pi global <命令>       # 同上，作用于国际版
 
 > `workbuddy2pi account <key>` 仍可用，但它的重启依赖计划任务；router 的
 > `account` 会先保存当前凭证再复制 slot，然后直接走 `doRestart`，更可控。
+
+## 在 Linux 上装各家桌面端（登录态来源）
+
+反代需要的不是「应用能跑」，而是**桌面端登录后写下的那份凭证**。所以每家先看官方
+有没有 Linux 包；没有的话，登录这一步在本机就做不到，反代只能报「未登录」。
+
+实测环境：CachyOS（Arch 系），有 `yay` / `pacman` / `flatpak`，**没有** AppImage
+运行器（`appimagetool` / `gearlever` 都没装）。
+
+| 来源 | AUR | Flatpak | 官方 Linux 包 | 结论 |
+|---|---|---|---|---|
+| **商汤小浣熊** `raccoon` | ❌ 无（AUR 的 `raccoon*` 是别的软件：Google Play 客户端、Python 库） | ❌ 无 | ✅ **有 .deb**（x64 / arm64） | 能装，见下 |
+| **WPS 灵犀** `lingxi` | ⚠️ `lingxi-ai-bin` 是 **WPS 插件**（文小舟），不是灵犀桌面端 | ❌ 无 | ❌ 官网只给 Win/macOS | ✅ **用 Wine 跑 Windows 版** |
+| **有道龙虾** `lobster` | ❌ 无（`lobster*` 是别的软件） | ❌ 无 | ❌ 官方 89 个历史版本只有 `windowsX64` / `macIntel` / `macArm` | ✅ **用 Wine 跑 Windows 版** |
+| Loomy `loomy` | — | — | — | 用户说跳过 |
+
+> 灵犀的 `lingxi-ai-bin` 容易误认：它的描述写着「WPS Office AI Agent 插件（文小舟，
+> 原灵犀AI）」，装完是 `/opt/lingxi-ai/plugin/`（WPS 加载项）＋ 一个 **Windows PE**
+> 的 `lingxi-launcher.exe`。而反代要的是 `app_server_link/service/lingxi.exe`
+> 这个 Go app-server。两者不是一回事，装了也不能让 `lingxi` provider 工作。
+
+### WPS 灵犀 / 有道龙虾：Wine 跑 Windows 版（实测可行）
+
+两家都没有 Linux 包，但都能在 Wine 里跑起来。关键是**只把 Wine 用在必要的地方**：
+
+```
+桌面端 GUI（Wine，只为登录一次）→ 写 cookie/aqlite 到 Wine prefix
+                                        ↓
+反代（原生 Node，常驻）→ 读 prefix 里的凭证 → 在 Wine 里 headless 拉起 app-server
+```
+
+GUI 只在**登录那一次**需要（卡顿可以忍）；日常是 headless 的 app-server 在跑，
+没有界面就没有渲染开销。
+
+#### 1. 装 Wine（yay，需要 sudo）
+
+```bash
+yay -S --needed wine-staging wine-gecko wine-mono
+```
+
+用 `wine-staging` 而不是 flatpak：flatpak 沙箱会隔离宿主路径和环境变量，
+反代要 spawn prefix 里的 exe、又要读宿主侧的文件，隔一层很难受。
+
+#### 2. 准备 prefix、字体、DXVK
+
+```bash
+bash scripts/wine-setup.sh                 # 建 prefix + 灌字体 + 修 FontLink + 自检
+```
+
+这一步解决三个实测踩到的问题：
+
+| 问题 | 真因 | 修法 |
+|---|---|---|
+| 中文全是方框 | Windows Server 默认不装中文字体 | 从 Windows 分区的 `Windows/Fonts` 复制 250+ 个字体进来 |
+| 部分字符方框/断链 | Wine 预置 FontLink 引用了 `Meiryo` / `MS Mincho` / `Batang`（Server 版没有） | 改指向 `Noto Sans/Serif CJK`，脚本里做 |
+| **字体割裂**（一行里混几种字形） | 应用 CSS 写死 `font-family: PingFang SC`（**无回退栈**），Linux 没这个族 → Chromium 逐字回退 | `scripts/font-alias.mjs` 造同名族（`PingFang SC` / `MiSans`），Chromium 直接命中原族名 |
+
+装 DXVK（D3D→Vulkan，显著改善卡顿；**Intel 核显 + `lib32-vulkan-intel` 即可**）：
+
+```bash
+# 不用 root：解包到 prefix 的 system32/syswow64，再设 DLL override
+curl -L -o dxvk.tar.gz https://github.com/doitsujin/dxvk/releases/download/v3.1.1/dxvk-3.1.1.tar.gz
+tar -xzf dxvk.tar.gz
+cp dxvk/x64/*.dll "$WINEPREFIX/drive_c/windows/system32/"
+cp dxvk/x32/*.dll "$WINEPREFIX/drive_c/windows/syswow64/"
+for d in d3d8 d3d9 d3d10core d3d11 dxgi; do
+  wine reg add 'HKCU\Software\Wine\DllOverrides' /v $d /d native /f
+done
+```
+
+#### 3. 启动桌面端登录
+
+```bash
+bash scripts/wine-run-lingxi.sh
+```
+
+脚本里固定了这几项，每一项都对应一个实测的坑：
+
+- `WINEDEBUG=-all` —— Electron 会打几万行 fixme，字符串格式化本身就有开销
+- **NTSync**（不设 `WINEESYNC`/`WINEFSYNC`）—— 见下面「按社区最佳实践调优」
+- `--disable-direct-composition` —— **不加会直接崩**：Chromium 用 DirectComposition
+  建交换链，而 DXVK 没实现 `CreateSwapChainForComposition`，
+  日志里是 `DxgiFactory::CreateSwapChainForComposition: Not implemented`
+- `FREETYPE_PROPERTIES=truetype:interpreter-version=35` —— 字更锐利（ArchWiki）
+- `DXVK_CONFIG_FILE` 指向调优过的 `dxvk.conf`
+
+### 按社区最佳实践调优（`scripts/wine-tune.sh`）
+
+依据：ArchWiki/Wine（NTSync、CSMT、DXVK、字体平滑）、DXVK 仓库的 `dxvk.conf` 与
+`wiki/Configuration`。每条都不是凭感觉加的：
+
+| 项 | 设置 | 为什么 |
+|---|---|---|
+| **同步原语** | **用 NTSync，不设 `WINEESYNC`/`WINEFSYNC`** | ArchWiki 明确写 ESync/FSync 是 NTSync 之前的变通方案，Wine 官方不打算保留；Wine 10.16+ 默认启用 NTSync，内核 6.14+ 提供 `/dev/ntsync`。三者**互斥**，同时设只会把 NTSync 关掉。验证：`ls -l /proc/<pid>/fd \| grep ntsync` |
+| CSMT | `1`（默认） | Wine 3.2 起默认开，把 GL 调用放独立线程；仅 wined3d 回退路径用得到 |
+| ClearType | `FontSmoothing=2 / Type=2 / Orientation=1 / Gamma=1400` | ArchWiki「Enable font smoothing」：Wine 默认关平滑，字会发虚发灰 |
+| DPI | `LogPixels=96` | 面板 1920x1200 @ scale 1，写死免得被自动探测带偏 |
+| 崩溃弹窗 | `WineDbg\ShowCrashDialog=0` | Wine 自带 Win32 崩溃窗会盖掉应用自己的错误页 |
+| winemenubuilder | 禁用 | 每次 wineboot 都会跑，往宿主菜单写 `.desktop`；无 X 场景还会报错拖慢启动 |
+| `dxvk.enableGraphicsPipelineLibrary` | `Auto` | 把 D3D11 管线编译拆成可缓存阶段（Intel ANV 支持），降低首次打开界面的卡顿 |
+| `d3d11.relaxedBarriers` | `True` | Intel 上省同步开销；UI 场景不会出现游戏里的渲染错误 |
+| `dxgi.syncInterval=1` / `dxvk.tearFree=True` | — | 桌面 UI 有撕裂很显眼 |
+| `dxvk.enableMemoryDefrag` | `False` | UI 分配模式稳定，关掉省 CPU |
+
+`scripts/wine-tune.sh` 会自动判断有没有 `/dev/ntsync`：有就走 NTSync，没有才退回
+`WINEFSYNC=1`。启动脚本同样如此，保证「只启用一种同步实现」。
+
+> 实测确认 DXVK 真的接管（不是只把 DLL 拷进去）：
+> ```
+> info:  DXVK: v3.1.1
+> info:  Found config file: .../wineprefixes/lingxi/dxvk.conf
+> info:  Found device: Intel(R) Graphics (RPL-P) (Intel open-source Mesa driver 26.2.6)
+> ```
+> 注意 `DXVK_HUD` 只用于确认接管——它会强制持续重绘，**日常别开**。
+
+#### 页面「糊屏/白屏」但按钮能点（最容易误判的一个坑）
+
+症状：窗口出来了，背景（模糊壁纸）也在，但正文/卡片不绘制；鼠标移上去**按钮仍有
+hover 和点击响应**。
+
+真因是 **Chromium 的合成层没画**，不是页面没加载：
+
+- 命中测试（hit test）走的是渲染树（layout tree），它已经建好了；
+- 但显示合成器（viz/display compositor）交给 DXVK 的那条交换链路径画不出内容层。
+
+修法：加 `--disable-gpu-compositing`。
+
+它只关**显示合成器**，**GPU 光栅（raster）仍然开启**，所以不是「退回纯软件渲染」——
+绘制还是 GPU 干，只是合成换回软件路径。实测（灵犀）加之前是糊屏，加之后侧边栏、
+聊天区、模型选择器全部正常。
+
+> 对照实验（用来定位到底哪一层坏了）：
+> - `--disable-direct-composition` 单独加 → 不崩，但仍糊屏
+> - `--disable-gpu-compositing` 单独加 → 正常渲染
+> - `--disable-gpu`（纯软件）→ 正常渲染，但没必要，白丢 GPU 光栅
+> - `--use-angle=gl` → 窗口直接没建出来
+>
+> 所以最终组合是 `--disable-direct-composition --disable-gpu-compositing`，
+> 两条都留在 `scripts/wine-run-app.sh` 的 `BASE_FLAGS` 里。
+>
+> 有趣的是：**LobsterAI 用同一套参数没有这个现象**（它也有 backdrop blur）。
+> 说明这是灵犀特定的合成行为触发的，不是所有 Electron 的通病——所以参数按
+> 「能同时兼容两家」来定，而不是只对一家有效。
+
+登录后 cookie 落在
+`$WINEPREFIX/drive_c/users/<user>/AppData/Roaming/WPS 灵犀/Partitions/*/Network/Cookies`。
+
+#### 4. 反代侧怎么读这份凭证
+
+`Local State` 里的 cookie 主密钥是 **DPAPI 加密**的，而 Wine 自带的 `powershell.exe`
+是个空壳（`fixme:powershell:wmain stub`），原来那套 `ProtectedData.Unprotect` 用不了。
+
+解法是仓库里带了一个交叉编译的小 PE（`integrations/lingxi2api/tools/windows-dpapi.exe`，
+源码在同目录 `.go`）：在**同一个 prefix** 里跑 `wine windows-dpapi.exe "<Local State>"`
+→ `CryptUnprotectData` → 拿到 32 字节主密钥 → 反代用 AES-GCM 解 cookie。
+
+```
+反代启动
+  ├─ appDataRoot() 自动识别 Wine prefix 里的 AppData\Roaming\WPS 灵犀
+  ├─ windowsMasterKey() 在 Linux 上改走 wine + windows-dpapi.exe
+  ├─ locateAppServer() 认 app_server_link/ 与 app_server_<版本>/ 两种布局
+  └─ spawn: wine <lingxi.exe> --stdin --auth-storage=runtime --data-dir <Windows 路径>
+```
+
+> 为什么 `locateAppServer()` 要看两种布局：Windows 上桌面端建的是符号链接
+> `app_server_link → app_server_6.1.0`；Wine 里符号链接常建不成，只留下一个空的
+> `app_server_link` 和真实的 `app_server_6.1.0` 目录。只认前者会报「找不到 app-server」。
+
+实测结果（CachyOS + Intel 核显）：
+
+```
+GET  /v1/models            → 13 个模型（pro / max / deepseek-v4.1-flash / GLM-5.3 …）
+POST /v1/chat/completions  → {"model":"deepseek-v4.1-flash"} → "通了"
+GET  /v1/quota             → 智点余额
+```
+
+#### 有道龙虾
+
+同理，但比灵犀简单：它**不需要 spawn 任何 exe**，反代只读两样东西——
+
+- `$WINEPREFIX/drive_c/users/<user>/AppData/Roaming/LobsterAI/lobsterai.sqlite`（登录态）
+- 同目录的 `openclaw/loopback-state.json`（桌面端 tokenProxy 的端口与 token）
+
+Wine 和宿主共享网络命名空间，所以 tokenProxy 的 `127.0.0.1:<port>` 直接可用。
+`integrations/wine-paths.js` 会自动把这两条路径喂给反代。
+
+##### 安装时的一个坑：`win-resources.tar` 解不开
+
+龙虾的安装器最后一步要解 `resources/win-resources.tar`（36630 个条目），
+它先找系统 `tar`，找不到就退回内置提取器；Wine 里两者都不成：
+
+```
+phase=system-tool-resolved tool=tar status=helper-not-found
+phase=tar-extract-error reason=runtime-entry-missing-after-extract
+phase=tar-extract-failed-archive-preserved action=abort-install
+```
+
+安装器退出码 3，但**文件其实都装好了**。直接在 Linux 侧补解一次即可：
+
+```bash
+cd "$WINEPREFIX/drive_c/users/$USER/AppData/Local/Programs/LobsterAI/resources"
+tar -xf win-resources.tar
+```
+
+##### 启动时的一个坑：Wine 的 chmod 对 SQLite `-shm` 必返回 EBUSY
+
+症状是主界面能出来，但弹「AI 引擎网关启动失败」：
+
+```
+Config health-state write failed: EBUSY: resource busy or locked,
+  chmod 'C:\...\openclaw\state\state\openclaw.sqlite-shm'
+[openclaw] Could not start the CLI.
+[openclaw] Reason: EBUSY: ...
+```
+
+**这是 Wine 的通用缺陷，不是龙虾的 bug**，而且能精确复现（用 Wine 里的
+Windows 版 node 打开 WAL 模式的库，再 chmod `-shm`，必报 EBUSY）：
+
+```
+chmod -shm FAIL: EBUSY      ← 不加载 shim
+chmod -shm ok               ← 加载 scripts/wine-node-shim.js
+```
+
+成因链：Node 的 `fs.chmod` → `SetFileAttributes` → Wine → `chmod(2)`；
+`-shm` 是 SQLite 的共享内存文件，已被 mmap，Wine 这里返回 EBUSY。
+而 openclaw 在「打开数据库 → 收紧权限 0600」这步直接把异常抛上去，导致启动失败。
+
+修法有两层，缺一不可：
+
+**第一层：吞掉 EBUSY**（`scripts/wine-node-shim.js`）。把**只针对 EBUSY** 的
+chmod 降级为无操作。可以安全忽略，因为 Wine 下权限位本来就不生效（实测 chmod
+0600 之后仍是 0666），而且只吞 EBUSY，别的错误照常抛。
+
+**第二层：在「链接之前」打补丁**。这一步才是真正的难点，两个坑：
+
+1. `NODE_OPTIONS` 对龙虾**无效**。它用 Electron 的 `ELECTRON_RUN_AS_NODE`
+   模式跑网关，而 Electron 会忽略 `NODE_OPTIONS`（实测 `process.execArgv`
+   里根本没有 `--require`）。
+2. 等应用起来再 `fs.chmod = ...` 也无效。ESM 的具名导入
+   （`import { chmodSync } from 'node:fs'`）在模块链接时就固定了函数引用，
+   运行时改写模块对象不会影响已链接的绑定（实测无效）。
+
+所以用 `scripts/wine-patch-openclaw.mjs` 做「wrapper 入口 + 动态 import」：
+
+```
+gateway-bundle.mjs       ← 1.2K wrapper：先打 chmod 补丁
+gateway-bundle.impl.mjs  ← 原 31M bundle（改名保留）
+```
+
+wrapper 先补丁、再 `await import()` 原 bundle。动态 import 发生在补丁**之后**，
+新模块链接时拿到的就是打过补丁的函数（实测有效）。
+
+还有一个隐蔽的坑：launcher 在 import 前会把 `process.argv[1]` 设成
+`gateway-bundle.mjs`，而原 bundle 是**靠 `argv[1]` 与 `import.meta.url` 比对
+来判断「自己是不是主入口」**的。如果 wrapper 只是简单 `import('./impl.mjs')`，
+模块会加载成功、但 CLI 主体不启动——日志停在 `import ok` 后再无输出、端口也不监听。
+所以 wrapper 必须先把 `argv[1]` 指回 impl：
+
+```js
+const impl = new URL('./gateway-bundle.impl.mjs', import.meta.url);
+process.argv[1] = fileURLToPath(impl);
+await import(impl.href);
+```
+
+两个健康信号：
+
+```
+bundle size=0.0MB        ← wrapper 生效（原 bundle 是 30.4MB）
+[gateway] ready          ← 网关真正启动（此后 18789 端口监听）
+```
+
+重装龙虾会覆盖补丁，重跑 `node scripts/wine-patch-openclaw.mjs --force` 即可。
+
+### 商汤小浣熊（有原生 .deb）
+
+官方直链（`platform` 只认 `linux-x64` / `linux-arm64`）：
+
+```bash
+curl -L -o raccoon.deb \
+  "https://www.xiaohuanxiong.com/download/catalog?platform=linux-x64"
+
+# 系统级（需要 sudo）
+sudo pacman -U ./raccoon.deb      # 里面就是个 Electron 树，postinst 建 /usr/bin/raccoon-ai
+
+# 用户级（没有 sudo 时，实测可行）
+ar x raccoon.deb && tar -xJf data.tar.xz
+cp -a "opt/商汤小浣熊" ~/.local/opt/raccoon-ai
+ln -sf ~/.local/opt/raccoon-ai/raccoon-ai ~/.local/bin/raccoon-ai
+# 再写 ~/.local/share/applications/raccoon-ai.desktop（Exec 指向上面的路径）
+```
+
+装完启动一次、在窗口里登录，**token 就会落到**
+`~/.config/office-raccoon/agent/config/auth.json`。反代读的是这个文件，登录后
+`restart raccoon` 即可生效（不需要一直开着桌面端——实测关掉 GUI 后
+`/v1/quota` 仍返回真实余额）。
+
+`debtap` / `alien` 本机都没装，`yay -S debtap` 要 sudo 密码；上面「解包 + 放
+`~/.local/opt`」这条路不需要 root，效果一样。
+
+### Wine 相关的目录与脚本
+
+| 路径 | 用途 |
+|---|---|
+| `~/.local/share/wineprefixes/lingxi` | 专用 prefix（字体、DXVK、两家桌面端与登录态都在这里） |
+| `scripts/wine-setup.sh` | 一键建 prefix + 灌字体 + 修 FontLink + 自检 |
+| `scripts/wine-tune.sh` | 按社区最佳实践调优 prefix（NTSync/字体平滑/DXVK 配置） |
+| `scripts/wine-run-app.sh` | 通用启动器：`lingxi` / `lobster`，含性能与渲染参数 |
+| `scripts/wine-run-lingxi.sh` | 兼容入口，等价于 `wine-run-app.sh lingxi` |
+| `scripts/wine-patch-openclaw.mjs` | 给龙虾的 openclaw 网关打 chmod-EBUSY 补丁 |
+| `scripts/wine-node-shim.js` | Wine 下 Node 的 chmod 补丁（EBUSY → 无操作） |
+| `scripts/font-alias.mjs` | 造 `PingFang SC` / `MiSans` 同名族，修字体割裂 |
+| `scripts/fonts-register.mjs` / `fontlink-fix.mjs` / `fontlink-check.mjs` / `fonts-verify.mjs` | 字体注册、回退链修补、校验 |
+| `integrations/wine-paths.js` | 反代/router/health 共用：在 prefix 里找各家的 AppData |
+| `integrations/lingxi2api/tools/windows-dpapi.exe` | Wine 里解 DPAPI（+ 同名 `.go` 源码） |
+
+官方直链（`platform` 只认 `linux-x64` / `linux-arm64`）：
+
+```bash
+curl -L -o raccoon.deb \
+  "https://www.xiaohuanxiong.com/download/catalog?platform=linux-x64"
+
+# 系统级（需要 sudo）
+sudo pacman -U ./raccoon.deb      # 里面就是个 Electron 树，postinst 建 /usr/bin/raccoon-ai
+
+# 用户级（没有 sudo 时，实测可行）
+ar x raccoon.deb && tar -xJf data.tar.xz
+cp -a "opt/商汤小浣熊" ~/.local/opt/raccoon-ai
+ln -sf ~/.local/opt/raccoon-ai/raccoon-ai ~/.local/bin/raccoon-ai
+# 再写 ~/.local/share/applications/raccoon-ai.desktop（Exec 指向上面的路径）
+```
+
+装完启动一次、在窗口里登录，**token 就会落到**
+`~/.config/office-raccoon/agent/config/auth.json`。反代读的是这个文件，登录后
+`restart raccoon` 即可生效（不需要一直开着桌面端——实测关掉 GUI 后
+`/v1/quota` 仍返回真实余额）。
+
+`debtap` / `alien` 本机都没装，`yay -S debtap` 要 sudo 密码；上面「解包 + 放
+`~/.local/opt`」这条路不需要 root，效果一样。
+
+### 另外两家为什么装不了
+
+- **有道龙虾**：官网版本历史（`api-overmind.youdao.com/.../lobsterai/prod/client-version-history`）
+  89 条记录里，平台字段只有 `windowsX64` / `macIntel` / `macArm`，没有任何 Linux 包；
+  页面文案里的「Linux」只出现在「Alpine Linux 沙箱」和更新日志的「Linux 端打包优化」。
+- **WPS 灵犀**：下载页的 URL 模板写死在 JS 里，只有
+  `win/...-setup.exe`、`mac/...-arm64.dmg`、`mac/...-x64.dmg` 三种；
+  试过 `linux/...deb`、`...AppImage` 全是 404。反代又必须 spawn 那个 Go app-server，
+  所以本机无解。
 
 ## 升级反代 wheel 的完整流程
 

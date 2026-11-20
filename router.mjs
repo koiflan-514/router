@@ -2,7 +2,7 @@
 /**
  * router.mjs — 统一启动、停止、重启、探活本机所有反代。
  *
- * 十二家全常驻会同时挂着十几个子进程（Trae 两段式），而多数时候你只用其中一两个。这里让
+ * 十三家全常驻会同时挂着十几个子进程（Trae 两段式），而多数时候你只用其中一两个。这里让
  * 「开哪几个」变成一个显式选择，并且这个选择要落到三处，缺一处就会出现
  * 「以为关了其实还在跑」或「以为开了但客户端看不到」：
  *
@@ -10,7 +10,7 @@
  *   2. pi 的模型可见性     —— provider 注册与模型目录
  *   3. opencode 的 provider —— 写进 opencode.json 的那份
  *
- * 从 2026-11 起，router 直接托管全部十二家反代，不再依赖 qoder2pi /
+ * 从 2026-11 起，router 直接托管全部十三家反代，不再依赖 qoder2pi /
  * workbuddy2pi 的计划任务来拉起进程（计划任务在本机并不总是可靠）：
  *
  *   - 每家的命令行、环境变量、日志、端口都写在 PROVIDERS 里
@@ -97,8 +97,13 @@ const DUMATE_DIR =
 // 从 Electron cookie jar 解出 wps_sid 鉴权，提供 OpenAI 兼容对话 + 智点余额。
 const LINGXI_DIR =
   process.env.ROUTER_LINGXI_DIR || path.join(INTEGRATIONS_DIR, 'lingxi2api');
+// 有道龙虾（LobsterAI）反代：本仓库自写。桌面端已经在 127.0.0.1 的随机端口上跑了
+// 一个 tokenProxy（负责 access token 刷新与用量上报），反代优先复用它；桌面端退到
+// 后台时再用 SQLite 里的 access token 直连上游。模型目录、积分与签到由反代补齐。
+const LOBSTER_DIR =
+  process.env.ROUTER_LOBSTER_DIR || path.join(INTEGRATIONS_DIR, 'lobsterai2api');
 
-// 统一网关：把上面十二家拼成一个端口、两种方言。它不是「第十三家反代」，而是前面的一层，
+// 统一网关：把上面十三家拼成一个端口、两种方言。它不是「第十四家反代」，而是前面的一层，
 // 所以端口单独留一个（默认 8785，不占用任何一家的端口段）。
 const GATEWAY_DIR = path.join(HERE, 'gateway');
 const GATEWAY_PORT = Number(process.env.ROUTER_GATEWAY_PORT || 8785);
@@ -192,6 +197,44 @@ function keyFor(providerId) {
   } catch {
     return null;
   }
+}
+
+/**
+ * pi 的 models.json 里某个 provider 的模型数组；没有就返回 null。
+ *
+ * 用它的场景：反代的 `/v1/models` 需要桌面端登录态，未登录时回 401。
+ * 这时 opencode 里就永远写不进这家 provider，模型选择器里是空的；
+ * 而 pi 的模型表是 `scripts/pi-models.mjs` 早先登录时拉下来的快照，
+ * 拿它兜底比「写不进去」好——模型 id 与反代一致，登录后 sync 会自动换成实时目录。
+ */
+function piModelsFor(providerId) {
+  try {
+    const cfg = readJsonFile(path.join(HOME, '.pi', 'agent', 'models.json'));
+    const p = cfg && cfg.providers && cfg.providers[providerId];
+    return p && Array.isArray(p.models) && p.models.length ? p.models : null;
+  } catch {
+    return null;
+  }
+}
+
+/** pi 的模型条目 → 反代 `/v1/models` 的形状，两种来源就能走同一段写 opencode 的代码。 */
+function piModelAsListed(entry, { noTools = false } = {}) {
+  if (!entry || !entry.id) return null;
+  const input = Array.isArray(entry.input) ? entry.input : ['text'];
+  const caps = entry.capabilities || {};
+  return {
+    id: entry.id,
+    name: entry.name || entry.id,
+    context_length: entry.contextWindow,
+    max_output_tokens: entry.maxTokens,
+    capabilities: {
+      vision: input.includes('image') || caps.vision === true,
+      reasoning: entry.reasoning === true || caps.reasoning === true,
+      // pi 的 models.json schema 没有工具能力位，所以灵犀这种「不吐 tool_calls」的
+      // 供应商要靠 provider 上的 ocNoTools 显式传进来，否则会被当成能驱动编码 agent。
+      tool_call: !noTools && entry.toolCall !== false && entry.tool_call !== false && caps.tool_call !== false,
+    },
+  };
 }
 
 function readJsonFile(file) {
@@ -304,6 +347,8 @@ function authStatus(p) {
       return dumateAuth();
     case 'lingxi':
       return lingxiAuth();
+    case 'lobster':
+      return lobsterAuth();
     case 'gateway':
       // 网关没有上游凭证：它靠下面几家反代的凭证工作，自己永远是「就绪」。
       return authResult(true, `聚合 ${PROVIDERS.length - 1} 家反代`);
@@ -681,8 +726,14 @@ function loomyAccounts() {
 function dumateAppData() {
   const explicit = String(process.env.DUMATE_APP_DATA || '').trim();
   if (explicit) return explicit;
-  const base = process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming');
-  return path.join(base, 'qianfan-desktop-app');
+  // 与 integrations/dumate2api/dumate-proxy.js 的 appDataRoot() 保持一致：
+  // 非 Windows 上桌面端把 userData 放在 ~/.config/qianfan-desktop-app，
+  // 写成 APPDATA 会把「已登录」误报成「未登录」。
+  if (process.platform === 'win32') {
+    const base = process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming');
+    return path.join(base, 'qianfan-desktop-app');
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'qianfan-desktop-app');
 }
 
 function readDumateProfile() {
@@ -739,8 +790,33 @@ function dumateAccounts() {
 function lingxiAppData() {
   const explicit = String(process.env.LINGXI_APP_DATA || '').trim();
   if (explicit) return explicit;
-  const base = process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming');
-  return path.join(base, 'WPS 灵犀');
+  // 与 lingxi-proxy.js 的 appDataRoot() 对齐：Windows 用 %APPDATA%，其它平台用
+  // ~/.config。写死不存在的路径会让「装了没登录」被报成「未安装」。
+  if (process.platform === 'win32') {
+    const base = process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming');
+    return path.join(base, 'WPS 灵犀');
+  }
+  const native = path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'WPS 灵犀');
+  return firstWineOr(native, 'LINGXI_APP_DATA', ['WPS 灵犀']);
+}
+
+/**
+ * 原生目录优先，其次找 Wine prefix 里的同名 AppData 目录。
+ *
+ * 灵犀 / 龙虾官方只有 Windows 包，Linux 上靠 Wine 跑；那时登录态写在
+ * `<prefix>/drive_c/users/<user>/AppData/Roaming/<产品>`。只看原生路径会把
+ * 「Wine 里已登录」误报成「未安装」。
+ */
+function firstWineOr(nativeDir, explicitEnv, productNames) {
+  try {
+    const { candidateDirs, firstExistingDir } = require('./integrations/wine-paths.js');
+    const hit = firstExistingDir(
+      candidateDirs({ explicitEnv, nativeDir, productNames }),
+    );
+    return hit ? hit.dir : nativeDir;
+  } catch {
+    return nativeDir;
+  }
 }
 
 /** 桌面端是否在本机（配置目录存在即算装了；不代表已登录）。 */
@@ -787,6 +863,132 @@ function lingxiAccounts() {
   ];
 }
 
+// ---------------------------------------------------------------- 有道龙虾（LobsterAI）
+//
+// 桌面端把登录态写在自己的 SQLite（`%APPDATA%\LobsterAI\lobsterai.sqlite`）的
+// `kv.auth_tokens` / `kv.auth_user`；对话由桌面端的 tokenProxy 负责，积分走上游
+// `/api/subscription`。router 这边只读这两条 kv 做登录态展示，不发请求、不写数据库。
+// 读 SQLite 用 Node 22.5+ 的 `node:sqlite`；没有它时如实报「读不到」。
+
+function lobsterAppData() {
+  const explicit = String(process.env.LOBSTER_APP_DATA || '').trim();
+  if (explicit) return explicit;
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming'), 'LobsterAI');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(HOME, 'Library', 'Application Support', 'LobsterAI');
+  }
+  const native = path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'LobsterAI');
+  return firstWineOr(native, 'LOBSTER_APP_DATA', ['LobsterAI']);
+}
+
+function lobsterDbFile() {
+  return path.join(lobsterAppData(), 'lobsterai.sqlite');
+}
+
+function lobsterInstalled() {
+  try {
+    return fs.statSync(lobsterAppData()).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+let lobsterSqliteModule;
+let lobsterSqliteLoaded = false;
+
+/** 懒加载 node:sqlite：老 Node 上只是读不到，不影响 router 其它命令。 */
+function lobsterSqlite() {
+  if (lobsterSqliteLoaded) return lobsterSqliteModule;
+  lobsterSqliteLoaded = true;
+  try {
+    lobsterSqliteModule = require('node:sqlite');
+  } catch {
+    lobsterSqliteModule = null;
+  }
+  return lobsterSqliteModule;
+}
+
+function readLobsterKv(key) {
+  const mod = lobsterSqlite();
+  if (!mod || !mod.DatabaseSync) return null;
+  let db = null;
+  try {
+    db = new mod.DatabaseSync(lobsterDbFile(), { readOnly: true });
+    const row = db.prepare('select value from kv where key = ?').get(key);
+    return row && typeof row.value === 'string' ? row.value : null;
+  } catch {
+    return null;
+  } finally {
+    try {
+      if (db) db.close();
+    } catch {}
+  }
+}
+
+function readLobsterKvJson(key) {
+  const text = readLobsterKv(key);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function readLobsterSession() {
+  const tokens = readLobsterKvJson('auth_tokens');
+  const token = tokens && String(tokens.accessToken || '').trim();
+  if (!token) return null;
+  const user = readLobsterKvJson('auth_user') || {};
+  const payload = jwtPayload(token);
+  const loopback = readJsonFile(path.join(lobsterAppData(), 'openclaw', 'loopback-state.json')) || {};
+  return {
+    token,
+    refreshToken: tokens && String(tokens.refreshToken || ''),
+    userId: String(user.userId || (payload && payload.sub) || ''),
+    yid: String(user.yid || ''),
+    nickname: String(user.nickname || ''),
+    accountMode: String(user.accountMode || (payload && payload.accountMode) || 'personal'),
+    appVersion: loopback && loopback.appVersion ? String(loopback.appVersion) : '',
+    expiresAt: payload && Number(payload.exp) ? Number(payload.exp) * 1000 : null,
+  };
+}
+
+function lobsterAuth() {
+  if (!lobsterInstalled()) return authResult(false, '未安装有道龙虾（LobsterAI）桌面端');
+  const session = readLobsterSession();
+  if (!session) {
+    return authResult(false, `未登录（打开 LobsterAI 桌面端登录；凭据在 ${lobsterDbFile()}）`);
+  }
+  const who = session.nickname || session.yid || shortUser(session.userId);
+  return authResult(true, `已登录（${who}）`, session.expiresAt);
+}
+
+function lobsterAccounts() {
+  if (!lobsterInstalled()) return [];
+  const session = readLobsterSession();
+  if (!session) return [];
+  return [
+    {
+      key: session.userId || 'lobster',
+      name: session.nickname || session.yid || 'LobsterAI 账号',
+      uid: session.userId || null,
+      enabled: true,
+      active: true,
+      expiresAt: session.expiresAt,
+      detail: [
+        session.accountMode === 'enterprise' ? '企业版' : '个人版',
+        session.yid || '',
+        session.appVersion ? `桌面端 v${session.appVersion}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    },
+  ];
+}
+
 function accountsFor(p) {
   const rows = rawAccountsFor(p);
   for (const a of rows) a.health = accountHealth(p, a);
@@ -803,10 +1005,22 @@ function accountsFor(p) {
 function raccoonAuthCandidates() {
   const explicit = String(process.env.RACCOON_AUTH_FILE || '').trim();
   if (explicit) return [explicit];
-  return [
+  // 与 integrations/raccoon2api/raccoon-proxy.js 的 authCandidates() 保持一致：
+  // 非 Windows 上桌面端的 agent home 在 Electron userData 下（~/.config/office-raccoon），
+  // 只认 ~/.office-raccoon 会把「已装但未登录」和「已登录」都报成未登录。
+  const out = [];
+  if (process.platform !== 'win32') {
+    const configRoot = process.platform === 'darwin'
+      ? path.join(HOME, 'Library', 'Application Support')
+      : process.env.XDG_CONFIG_HOME || path.join(HOME, '.config');
+    out.push(path.join(configRoot, 'office-raccoon', 'agent', 'config', 'auth.json'));
+    out.push(path.join(configRoot, 'box-agent', 'config', 'auth.json'));
+  }
+  out.push(
     path.join(HOME, '.office-raccoon', 'agent', 'config', 'auth.json'),
     path.join(HOME, '.box-agent', 'config', 'auth.json'),
-  ];
+  );
+  return out;
 }
 
 function raccoonAuthFile() {
@@ -1085,6 +1299,7 @@ function rawAccountsFor(p) {
   if (p.kind === 'qwenwork') return qwenworkAccounts();
   if (p.kind === 'dumate') return dumateAccounts();
   if (p.kind === 'lingxi') return lingxiAccounts();
+  if (p.kind === 'lobster') return lobsterAccounts();
   return [];
 }
 
@@ -1244,6 +1459,29 @@ function accountHealth(p, a) {
     return level('unknown');
   }
 
+  if (p.kind === 'lobster') {
+    if (!lobsterInstalled()) {
+      notes.push('未安装有道龙虾（LobsterAI）桌面端');
+      return level('error');
+    }
+    const session = readLobsterSession();
+    if (!session) {
+      notes.push('未登录 LobsterAI 桌面端');
+      return level('error');
+    }
+    const days = expiryDays(session.expiresAt);
+    if (days === null) return level('unknown');
+    if (days < 0) {
+      notes.push('access token 已过期（打开桌面端会自动 refresh）');
+      return level(session.refreshToken ? 'warn' : 'error');
+    }
+    if (days < 3) {
+      notes.push(`access token 剩 ${days} 天`);
+      return level('warn');
+    }
+    return level('ok');
+  }
+
   if (p.kind === 'dumate') {
     // 登录态在桌面端 userData 里；main-server 是否在跑由端口探活单独判断。
     if (!a || !a.uid) {
@@ -1316,6 +1554,7 @@ function accountFixHint(p, a) {
   if (p.kind === 'qwenwork') return `打开千问办公桌面端登录并随便发一句（签发推理凭据）；或 node router.mjs login ${p.id}`;
   if (p.kind === 'dumate') return `打开百度搭子桌面端登录；或 node router.mjs login ${p.id}`;
   if (p.kind === 'lingxi') return `打开 WPS 灵犀桌面端登录（SID 写入 cookie 库后反代自动读到）`;
+  if (p.kind === 'lobster') return `打开 LobsterAI 桌面端登录；或 node router.mjs login ${p.id}`;
   return `node router.mjs login ${p.id}`;
 }
 
@@ -1328,7 +1567,7 @@ function healthMark(health) {
 }
 
 function printAccounts(p, accounts) {
-  const single = ['qoder', 'loomy', 'raccoon', 'qwenwork', 'dumate', 'lingxi'].includes(p.kind);
+  const single = ['qoder', 'loomy', 'raccoon', 'qwenwork', 'dumate', 'lingxi', 'lobster'].includes(p.kind);
   say(
     `${C.bold}${p.title}${C.reset}  ${dim(`:${p.port} · ${accounts.length} 个账号${single ? '（单账号）' : ''}`)}`,
   );
@@ -1656,6 +1895,11 @@ async function switchAccount(p, accounts, arg, { dryRun = false } = {}) {
     say(dim('  换号：在 WPS 灵犀桌面端退出后重新登录，反代会自动从 cookie 库读到新 SID'));
     return 1;
   }
+  if (p.kind === 'lobster') {
+    warn(`${p.title} 只有一个登录态，没有多账号可切换`);
+    say(dim('  换号：在 LobsterAI 桌面端退出后重新登录，反代会自动读到新的 auth_tokens'));
+    return 1;
+  }
 
   if (p.kind === 'workbuddy') return switchWorkbuddyAccount(p, target, { dryRun });
   if (p.kind === 'codearts') return switchCodeartsPool(p, target, { dryRun });
@@ -1675,7 +1919,7 @@ async function switchAllAccounts(p, { dryRun = false } = {}) {
     say(dim(`  想调整轮询头：node router.mjs account ${p.id} <编号 | key>`));
     return 0;
   }
-  if (['qoder', 'loomy', 'raccoon', 'qwenwork', 'dumate', 'lingxi'].includes(p.kind)) {
+  if (['qoder', 'loomy', 'raccoon', 'qwenwork', 'dumate', 'lingxi', 'lobster'].includes(p.kind)) {
     warn(`${p.title} 没有多账号池，--all 不适用`);
     return 1;
   }
@@ -1847,6 +2091,12 @@ async function removeAccountFromPool(p, accounts, arg, { dryRun = false, force =
       hint: '换号请在 WPS 灵犀桌面端退出后重新登录',
     };
   }
+  if (p.kind === 'lobster') {
+    return {
+      error: `${p.title} 的登录态由 LobsterAI 桌面端维护，没有可删的账号池`,
+      hint: '换号请在 LobsterAI 桌面端退出后重新登录',
+    };
+  }
   const matched = matchAccount(accounts, arg);
   if (matched.error) return { error: matched.error };
   const target = matched.account;
@@ -1963,6 +2213,11 @@ async function addAccountToPool(p, { dryRun = false, label = '' } = {}) {
   if (p.kind === 'lingxi') {
     warn(`${p.title} 只有一个登录态，请在 WPS 灵犀桌面端退出后登录另一个账号`);
     say(dim('  反代会直接读到新的 cookie 库，不需要重新配置 provider'));
+    return 1;
+  }
+  if (p.kind === 'lobster') {
+    warn(`${p.title} 只有一个登录态，请在 LobsterAI 桌面端退出后登录另一个账号`);
+    say(dim('  反代会直接读到新的 auth_tokens，不需要重新配置 provider'));
     return 1;
   }
   const before = accountsFor(p);
@@ -2751,6 +3006,41 @@ const PROVIDERS = [
     ocProvider: 'lingxi',
     ocName: 'WPS 灵犀（Lingxi）',
     ocApiKey: 'lingxi-local',
+    // 灵犀不吐 OpenAI tool_calls。实时目录里有 capabilities.tool_call=false，
+    // 但退到 pi 快照时那份 schema 没有工具位，所以这里显式声明。
+    ocNoTools: true,
+  },
+  {
+    id: 'lobster',
+    title: '有道龙虾（LobsterAI）',
+    port: 8797,
+    kind: 'lobster',
+    control: 'spawn',
+    // 本仓库自写的零依赖 Node 反代：登录态在 LobsterAI 桌面端的 SQLite（kv.auth_tokens），
+    // 对话优先转发给桌面端自己的 tokenProxy（刷新与用量都归它），桌面端退出后直连上游。
+    // 模型目录、积分包、签到状态与逐模型倍率由反代补齐。
+    processes: [
+      {
+        name: 'lobster-proxy',
+        port: 8797,
+        command: () => process.execPath,
+        args: () => {
+          const script = path.join(LOBSTER_DIR, 'lobster-proxy.js');
+          if (!fs.existsSync(script)) throw new Error(`找不到 lobster-proxy.js：${script}`);
+          return [script, '--port', '8797'];
+        },
+        cwd: () => LOBSTER_DIR,
+        env: () => ({}),
+        log: () => path.join(RUN_DIR, 'lobster.log'),
+        errLog: () => path.join(RUN_DIR, 'lobster.log'),
+        ensureDirs: [RUN_DIR],
+        waitMs: 15000,
+      },
+    ],
+    logs: [path.join(RUN_DIR, 'lobster.log')],
+    ocProvider: 'lobster',
+    ocName: '有道龙虾（LobsterAI）',
+    ocApiKey: 'lobster-local',
   },
   {
     id: 'workbuddy',
@@ -2813,7 +3103,7 @@ const PROVIDERS = [
     ocProvider: 'workbuddy-global',
   },
   {
-    // 统一网关：把上面十二家合成一个端口 + 两种方言。
+    // 统一网关：把上面十三家合成一个端口 + 两种方言。
     // 它不是反代（没有上游），所以 processes 里只有一个 node 进程，且**不写 opencode**
     // ——是否把客户端切到网关上由用户决定（`router gateway install` 会写一份 provider）。
     id: 'gateway',
@@ -2836,7 +3126,7 @@ const PROVIDERS = [
       },
     ],
     logs: [path.join(RUN_DIR, 'gateway.log')],
-    // 网关的模型目录是十二家的并集，由它自己按需拉取，所以不参与 router 的写 provider 流程
+    // 网关的模型目录是十三家的并集，由它自己按需拉取，所以不参与 router 的写 provider 流程
     ocProvider: 'router-gateway',
     ocName: 'router 统一网关',
     ocApiKey: 'router-local',
@@ -4104,6 +4394,56 @@ async function loginDumate(p, { force = false } = {}) {
   return false;
 }
 
+/** 有道龙虾：没有命令行登录，拉起 LobsterAI 桌面端，等它把 auth_tokens 写进 SQLite。 */
+function lobsterExe() {
+  const candidates = [
+    process.env.LOBSTER_EXE,
+    'D:\\LobsterAI\\LobsterAI.exe',
+    path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'LobsterAI', 'LobsterAI.exe'),
+    path.join(process.env['LOCALAPPDATA'] || '', 'Programs', 'LobsterAI', 'LobsterAI.exe'),
+  ].filter(Boolean);
+  for (const file of candidates) {
+    try {
+      if (fs.statSync(file).isFile()) return file;
+    } catch {}
+  }
+  return null;
+}
+
+async function loginLobster(p, { force = false } = {}) {
+  const before = readLobsterSession();
+  if (before && !force) {
+    ok(`${p.title} ${lobsterAuth().label}`);
+    return true;
+  }
+  const exe = lobsterExe();
+  if (exe) {
+    try {
+      const child = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false });
+      child.on('error', () => {});
+      child.unref();
+      say(dim(`  已打开 ${path.basename(exe)}，请在窗口里完成登录（最多等 2 分钟）`));
+    } catch (e) {
+      warn(`  打不开 LobsterAI：${e.message}`);
+    }
+  } else {
+    warn('  找不到 LobsterAI.exe；请手动打开有道龙虾桌面端并登录');
+  }
+  say(dim(`  登录态：${lobsterDbFile()} 的 kv.auth_tokens`));
+  for (let i = 0; i < 60; i += 1) {
+    const now = readLobsterSession();
+    // --force 时只有 access token 真的变了才算重新登录成功。
+    const changed = now && (!before || now.token !== before.token);
+    if (changed) {
+      ok(`${p.title} 已登录（${lobsterAuth().label.replace(/^已登录（|）$/g, '')}）`);
+      return true;
+    }
+    await sleep(2000);
+  }
+  bad(`${p.title} 仍未读到登录态（${lobsterDbFile()}）`);
+  return false;
+}
+
 /**
  * 千问办公：同样没有命令行登录。它多一步——登录后必须在桌面端**发出过请求**，
  * 才会在 `engine-maas-key.dat` 里签发推理凭据；只登录不发请求时代理拿不到 key。
@@ -4194,6 +4534,7 @@ async function loginProvider(p, { force = false } = {}) {
   else if (p.kind === 'raccoon') success = await loginRaccoon(p, { force });
   else if (p.kind === 'qwenwork') success = await loginQwenwork(p, { force });
   else if (p.kind === 'dumate') success = await loginDumate(p, { force });
+  else if (p.kind === 'lobster') success = await loginLobster(p, { force });
   else if (p.kind === 'lingxi') {
     // 灵犀只能在桌面端登录（SID 写进 Electron cookie 库），没有命令行登录接口。
     if (lingxiInstalled()) {
@@ -4695,7 +5036,29 @@ function requireShared(name) {
 /**
  * 给没有 ocAdd 运维命令的供应商写 opencode provider：
  * 从它的 /v1/models 拉目录，key 从 pi 的 models.json 取。
+ *
+ * `/v1/models` 拿不到时（典型：桌面端没登录，反代回 401）退到 pi 模型表里的
+ * 快照，至少让 provider 出现在模型选择器里；登录后 `router models` 会用实时目录覆盖。
  */
+/**
+ * 取某家的模型清单：先试 '/v1/models'，失败再用 pi 模型表里的快照。
+ *
+ * 快照只在**首次写 provider**时用。刷新已存在的 provider 时用快照会把实时目录
+ * 降级成旧数据（典型：桌面端 token 临时过期，`router models` 反而把模型表改小），
+ * 所以调用方要用 `allowSnapshot: false` 关掉。
+ */
+async function providerModelList(p, { allowSnapshot = true } = {}) {
+  const live = await fetchModelsRetry(p.port, keyFor(p.id), 3, p.modelsPath || '/models');
+  if (live && live.length > 0) return { models: live, source: 'live' };
+  if (!allowSnapshot) return { models: null, source: null };
+
+  const snapshot = piModelsFor(p.ocProvider || p.id);
+  if (!snapshot) return { models: null, source: null };
+  // pi 里的条目顺序与反代一致，但形状不同；转成 /v1/models 的样子再走同一个映射
+  const models = snapshot.map((m) => piModelAsListed(m, { noTools: p.ocNoTools })).filter(Boolean);
+  return models.length > 0 ? { models, source: 'pi' } : { models: null, source: null };
+}
+
 async function addProviderFromModels(p) {
   // 只接积分的来源没有 /v1/models（反代会明确回 501），不该走到写 provider 这一步。
   if (p.creditsOnly) {
@@ -4708,7 +5071,7 @@ async function addProviderFromModels(p) {
     return { ok: true, wrote: false };
   }
 
-  const listed = await fetchModelsRetry(p.port, keyFor(p.id), 3, p.modelsPath || '/models');
+  const { models: listed, source } = await providerModelList(p);
   if (!listed || listed.length === 0) {
     return { ok: false, reason: `拿不到模型列表（:${p.port}）` };
   }
@@ -4725,7 +5088,8 @@ async function addProviderFromModels(p) {
       models: mod.toOpencodeModels(models),
     },
   ]);
-  ok(`${p.title} 已写入 opencode（${models.length} 个模型）`);
+  const note = source === 'pi' ? '，用的是 pi 模型表快照（登录后会换成实时目录）' : '';
+  ok(`${p.title} 已写入 opencode（${models.length} 个模型${note}）`);
   return { ok: true, wrote: true, backup: result.backup };
 }
 
@@ -4738,7 +5102,7 @@ async function addProviderFromModels(p) {
  */
 async function refreshProviderModels(p) {
   if (p.gateway) {
-    // 网关的模型清单是十二家的并集，由 `router gateway install` 写；
+    // 网关的模型清单是十三家的并集，由 `router gateway install` 写；
     // 它不是反代，没有自己的 /v1/models 目录可刷新
     return { ok: true, skipped: true, reason: '网关的模型清单由 gateway install 写入' };
   }
@@ -4760,7 +5124,7 @@ async function refreshProviderModels(p) {
     return { ok: true, wrote: true, models: ocModelCount(p.ocProvider) };
   }
 
-  const listed = await fetchModelsRetry(p.port, keyFor(p.id), 3, p.modelsPath || '/models');
+  const { models: listed, source } = await providerModelList(p, { allowSnapshot: false });
   if (!listed || listed.length === 0) return { ok: false, reason: `拿不到模型列表（:${p.port}）` };
   const models = p.ocSkip ? listed.filter((m) => !p.ocSkip(m.id || m.slug)) : listed;
   const mod = requireShared('opencode-config.js');
@@ -4776,7 +5140,7 @@ async function refreshProviderModels(p) {
       models: mod.toOpencodeModels(models),
     },
   ]);
-  return { ok: true, wrote: before !== models.length, models: models.length, before };
+  return { ok: true, wrote: before !== models.length, models: models.length, before, source };
 }
 
 /** `router models [id...]`：把各家上游的最新模型目录写回 opencode。 */
@@ -4803,7 +5167,7 @@ async function doSyncOpenCode(enabled, { startIds = null } = {}) {
   let changed = 0;
   for (const p of PROVIDERS) {
     // 网关是叠加层：它自己的 provider 由 `router gateway install` 显式写入，
-    // 不跟着开关自动增删——否则 `on gateway` 会顺手把十二家的 provider 全删掉。
+    // 不跟着开关自动增删——否则 `on gateway` 会顺手把十三家的 provider 全删掉。
     if (p.gateway) continue;
     // 只接积分的来源（creditsOnly，当前没有）没有模型目录，写进 opencode 只会
     // 得到一个选中就报错的假 provider。它的余额由 credits 插件直接读反代。
@@ -5761,6 +6125,20 @@ async function cmdDoctor() {
           : `${C.warn} 未安装 WPS 灵犀桌面端`,
       );
       checks.push(`${C.dim}对话可用（agent 形态，不吐 tool_calls）${C.reset}`);
+    }
+    if (p.kind === 'lobster') {
+      const session = readLobsterSession();
+      checks.push(
+        lobsterInstalled()
+          ? `${C.ok} 桌面端已安装`
+          : `${C.warn} 未安装有道龙虾桌面端`,
+      );
+      checks.push(
+        session
+          ? `${C.ok} 已登录（${session.nickname || shortUser(session.userId)}）`
+          : `${C.warn} 未登录（打开 LobsterAI 桌面端登录）`,
+      );
+      checks.push(`${C.dim}桌面端代理在线时复用其刷新与用量${C.reset}`);
     }
     // 本机限额：这一家的并发/速率闸门，避免「以为在限流其实没生效」
     // 网关是叠加层（不直连上游），限额对它的「免费供应商」分支才有意义
