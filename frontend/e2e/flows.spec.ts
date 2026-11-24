@@ -64,11 +64,11 @@ test.describe('日志页：过滤、跟随、行数档位都进 URL', () => {
 
     const filter = page.getByRole('textbox', { name: '过滤日志' });
     await filter.fill('INFO');
-    await expect(page.getByText(/^\d+ 处匹配$/)).toBeVisible();
+    await expect(page.getByText(/^\d+ \/ \d+ 行匹配$/)).toBeVisible();
     await expect(page).toHaveURL(/filter=INFO/);
 
     await filter.fill('zzz-没有这种日志');
-    await expect(page.getByText('0 处匹配', { exact: true })).toBeVisible();
+    await expect(page.getByText(/^0 \/ \d+ 行匹配$/)).toBeVisible();
     await expect(page.getByText('没有匹配当前过滤的日志')).toBeVisible();
   });
 

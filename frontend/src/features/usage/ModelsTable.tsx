@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import {
   Sheet,
   SheetContent,
@@ -16,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { DASH, fmtInt, fmtNumber } from '@/lib/format';
+import { DASH, fmtInt, fmtNumber, fmtPercent } from '@/lib/format';
 import { providerColorVar, providerTitle } from '@/lib/provider';
 import { toModelDetail, type ModelRow, type UsageSort, type UsageSortKey } from './usage-model';
 
@@ -84,6 +85,7 @@ export function ModelsTable({
 }) {
   const details = rows.map(toModelDetail);
   const selectedRow = selected ? details.find((d) => d.key === selected) : undefined;
+  const totalSteps = details.reduce((sum, row) => sum + (row.steps > 0 ? row.steps : 0), 0);
 
   function toggleSort(key: UsageSortKey) {
     if (sort.key === key) {
@@ -151,7 +153,23 @@ export function ModelsTable({
                 onClick={() => onSelect(row.key)}
                 className="cursor-pointer aria-selected:bg-accent"
               >
-                <TableCell className="font-medium">{row.id}</TableCell>
+                <TableCell className="min-w-44 font-medium">
+                  <div className="flex flex-col gap-1">
+                    <span>{row.id}</span>
+                    {totalSteps > 0 ? (
+                      <div className="flex items-center gap-2">
+                        <Progress
+                          value={Math.max(0, Math.min(100, (row.steps / totalSteps) * 100))}
+                          className="h-1 w-24"
+                          aria-label={`${row.id} steps 占比`}
+                        />
+                        <span className="text-[10px] tabular-nums text-muted-foreground">
+                          {fmtPercent(row.steps / totalSteps, 1)}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+                </TableCell>
                 <TableCell>
                   <ProviderCell providerID={row.providerID} />
                 </TableCell>

@@ -231,3 +231,129 @@ export function filterProviders(list: ProviderStatus[], q: string, provider: str
     return p.id.toLowerCase().includes(kw) || p.title.toLowerCase().includes(kw);
   });
 }
+
+/* ==========================================================================
+ * Fluent 总览扩展派生（全部由既有后端字段推导，不新增数据源）
+ * ========================================================================== */
+
+export interface DailyPoint {
+  /** ISO 日期（activity[].date 原样，可能缺失）。 */
+  date: string | null;
+  steps: number;
+}
+
+/** 近 N 天 activity 序列（按数组顺序，不排序也不补零日期，避免伪造）。 */
+export function activitySeries(u: UsageStats | null | undefined): DailyPoint[] {
+  const list = u?.activity ?? [];
+  return list.map((a) => ({ date: a.date ?? null, steps: a.steps ?? 0 }));
+}
+
+/** 只取有值的数值序列（供 sparkline 使用）；少于 2 点交给 Sparkline 显示占位。 */
+export function activityValues(u: UsageStats | null | undefined): number[] {
+  return activitySeries(u).map((p) => p.steps);
+}
+
+/** 首尾对比：用于 KPI 趋势；任一缺失返回 null（不编造 0 基线）。 */
+export function activityTrend(u: UsageStats | null | undefined): number | null {
+  const v = activityValues(u);
+  if (v.length < 2) return null;
+  return v[v.length - 1] - v[0];
+}
+
+export interface HealthBreakdown {
+  running: number;
+  authOk: number;
+  clientSynced: number;
+  noDrift: number;
+  /** 非叠加层条目数（叠加层不参与 on/off/客户端判定）。 */
+  managed: number;
+  /** 0–100；managed=0 时为 null（无法计算，不画成 0%）。 */
+  score: number | null;
+}
+
+/**
+ * 健康度 = 四项达标率的平均（运行 / 认证正常 / 客户端已写入 / 无漂移）。
+ *
+ * 口径与 SummaryStrip 一致：各项独立计数；网关叠加层不计入 managed，
+ * 认证 unknown 计为不达标（与 isAuthIssue 对齐）。
+ */
+export function deriveHealth(providers: ProviderStatus[]): HealthBreakdown {
+  const managed = providers.filter((p) => !p.overlay);
+  const n = managed.length;
+  const running = managed.filter((p) => p.up).length;
+  const authOk = managed.filter((p) => !isAuthIssue(p.auth)).length;
+  const clientSynced = managed.filter((p) => p.oc).length;
+  const noDrift = managed.filter((p) => p.drift.length === 0).length;
+  const score = n === 0 ? null : Math.round(((running + authOk + clientSynced + noDrift) / (n * 4)) * 100);
+  return { running, authOk, clientSynced, noDrift, managed: n, score };
+}
+
+export interface QuotaTopRow {
+  provider: string;
+  title: string;
+  /** 剩余占比 0–1；无法计算时为 null（buckets 无 total 或无数值）。 */
+  ratio: number | null;
+  /** 展示文本，复用 quotaSummaryText。 */
+  text: string;
+}
+
+/** 额度 Top：按剩余占比降序，只含能算出占比的行；无占比的行排最后。 */
+export function quotaTop(payload: { providers: QuotaRow[] } | null, limit = 5): QuotaTopRow[] {
+  const rows: QuotaTopRow[] = (payload?.providers ?? []).map((r) => {
+    const buckets = r.buckets ?? [];
+    let ratio: number | null = null;
+    for (const b of buckets) {
+      if (typeof b.total === 'number' && b.total > 0 && typeof b.remaining === 'number') {
+        ratio = Math.max(0, Math.min(1, b.remaining / b.total));
+        break;
+      }
+    }
+    return { provider: r.provider, title: r.title, ratio, text: quotaSummaryText(r) };
+  });
+  const known = rows.filter((r) => r.ratio !== null).sort((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0));
+  const unknown = rows.filter((r) => r.ratio === null);
+  return [...known, ...unknown].slice(0, limit);
+}
+
+export interface AttentionItem {
+  id: string;
+  provider: string;
+  title: string;
+  kind: 'drift' | 'auth';
+  text: string;
+}
+
+/** 待处理事项：漂移与认证异常逐项展开（供右侧栏紧凑列表）。 */
+export function attentionItems(providers: ProviderStatus[]): AttentionItem[] {
+  const items: AttentionItem[] = [];
+  for (const p of providers) {
+    if (p.drift.length) {
+      items.push({ id: `${p.id}-drift`, provider: p.id, title: p.title, kind: 'drift', text: driftDetailText(p) });
+    }
+    if (isAuthIssue(p.auth)) {
+      items.push({ id: `${p.id}-auth`, provider: p.id, title: p.title, kind: 'auth', text: stateComboText(p) });
+    }
+  }
+  return items;
+}
+
+/** 可领取数：后端显式 checkin.claimable=true 的来源数。 */
+export function claimableCount(payload: { providers: QuotaRow[] } | null): number {
+  return (payload?.providers ?? []).filter((r) => r.checkin?.claimable).length;
+}
+
+/**
+ * 一个额度条的分桶展示数据（仅取第一个有 total 的桶，其余在详情页查看）。
+ * 与 ProviderTable 的「额度摘要」口径一致：total>0 才画进度。
+ */
+export function quotaBarFor(row: QuotaRow | undefined): { pct: number; label: string } | null {
+  if (!row) return null;
+  for (const b of row.buckets ?? []) {
+    if (typeof b.total === 'number' && b.total > 0 && typeof b.remaining === 'number') {
+      const pct = Math.max(0, Math.min(100, (b.remaining / b.total) * 100));
+      const label = b.label?.trim() || '额度';
+      return { pct, label };
+    }
+  }
+  return null;
+}

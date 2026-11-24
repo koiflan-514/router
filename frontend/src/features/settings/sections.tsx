@@ -94,13 +94,21 @@ function DefRow({
   label,
   children,
   mono,
+  divider,
 }: {
   label: ReactNode;
   children: ReactNode;
   mono?: boolean;
+  /** `<dl>` 内容模型只允许 dt/dd/div，分组分隔线用边框而不是插入 Separator。 */
+  divider?: boolean;
 }) {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 py-2 text-sm">
+    <div
+      className={cn(
+        'flex flex-wrap items-start justify-between gap-x-4 gap-y-1 py-2 text-sm',
+        divider && 'border-t border-border',
+      )}
+    >
       <dt className="text-muted-foreground">{label}</dt>
       <dd className={cn('min-w-0 text-right break-all', mono && 'font-mono text-xs')}>{children}</dd>
     </div>
@@ -364,8 +372,7 @@ export function ConnectionCard({ env }: { env: Res<PanelEnv> }) {
             <Value v={null} />
           )}
         </DefRow>
-        <Separator className="my-1" />
-        <DefRow label="桥接地址" mono>
+        <DefRow label="桥接地址" mono divider>
           <Value v={data?.gateway.url} />
         </DefRow>
         <DefRow label="网关可达">

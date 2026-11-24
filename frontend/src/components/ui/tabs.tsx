@@ -4,11 +4,12 @@ import { cn } from '@/lib/cn';
 
 export const Tabs = TabsPrimitive.Root;
 
+/** Fluent 分段控件：surface-2 底槽，选中项用 surface-3 + elevation-2 抬起。 */
 export function TabsList({ className, ...props }: ComponentProps<typeof TabsPrimitive.List>) {
   return (
     <TabsPrimitive.List
       className={cn(
-        'inline-flex h-9 items-center gap-1 rounded-lg border border-border bg-muted/40 p-1 text-muted-foreground',
+        'inline-flex h-8 items-center gap-0.5 rounded-lg border border-stroke-1 bg-surface-2 p-0.5 text-text-secondary',
         className,
       )}
       {...props}
@@ -20,7 +21,8 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm',
+        'inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-[12px] font-medium outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50',
+        'hover:text-text-primary data-[state=active]:bg-surface-3 data-[state=active]:text-text-primary data-[state=active]:shadow-2',
         className,
       )}
       {...props}

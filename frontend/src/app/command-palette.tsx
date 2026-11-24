@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Search } from 'lucide-react';
+import { CornerDownLeft, Search } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { navItems } from './nav';
@@ -20,6 +20,7 @@ interface Command {
  *
  * 采用 APG 的 combobox + listbox 模式：输入框持有 `aria-activedescendant`，
  * 选项是 `role="option"` 的非聚焦元素，键盘与鼠标共用同一套选中状态。
+ * 视觉上是 Acrylic 浮层（半透明 + 模糊 + 细描边）。
  */
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
@@ -88,46 +89,48 @@ export function CommandPalette() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="max-w-lg gap-2 p-3" hideClose>
+      <DialogContent className="max-w-xl gap-2 p-3" hideClose>
         <DialogTitle className="sr-only">命令面板</DialogTitle>
-        <Input
-          autoFocus
-          role="combobox"
-          aria-expanded={open}
-          aria-controls="palette-listbox"
-          aria-autocomplete="list"
-          aria-activedescendant={activeId}
-          aria-label="搜索页面或操作"
-          placeholder="搜索页面或操作…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              setActive((i) => Math.min(i + 1, Math.max(0, filtered.length - 1)));
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setActive((i) => Math.max(i - 1, 0));
-            } else if (e.key === 'Enter') {
-              e.preventDefault();
-              choose(filtered[active]);
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              setOpen(false);
-            } else if (e.key === 'Tab') {
-              setOpen(false);
-            }
-          }}
-        />
-        <div
-          id="palette-listbox"
-          role="listbox"
-          aria-label="命令结果"
-          className="max-h-72 overflow-auto"
-        >
+        <div className="relative">
+          <Search
+            aria-hidden
+            className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-text-tertiary"
+          />
+          <Input
+            autoFocus
+            role="combobox"
+            aria-expanded={open}
+            aria-controls="palette-listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={activeId}
+            aria-label="搜索页面或操作"
+            placeholder="搜索页面或操作…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="h-9 pl-8"
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActive((i) => Math.min(i + 1, Math.max(0, filtered.length - 1)));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActive((i) => Math.max(i - 1, 0));
+              } else if (e.key === 'Enter') {
+                e.preventDefault();
+                choose(filtered[active]);
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                setOpen(false);
+              } else if (e.key === 'Tab') {
+                setOpen(false);
+              }
+            }}
+          />
+        </div>
+        <div id="palette-listbox" role="listbox" aria-label="命令结果" className="max-h-80 overflow-auto">
           {filtered.length === 0 ? (
-            <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
-              <Search className="size-4" /> 没有匹配项
+            <div className="flex items-center gap-2 p-3 text-ramp-14 text-text-secondary">
+              <Search aria-hidden className="size-4" /> 没有匹配项
             </div>
           ) : (
             filtered.map((cmd, i) => (
@@ -139,12 +142,15 @@ export function CommandPalette() {
                 onMouseEnter={() => setActive(i)}
                 onClick={() => choose(cmd)}
                 className={cn(
-                  'flex cursor-pointer items-center justify-between rounded-md px-3 py-2 text-left text-sm',
-                  i === active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60',
+                  'flex cursor-pointer items-center justify-between rounded-md px-3 py-2 text-left text-ramp-14 transition-colors duration-150',
+                  i === active ? 'bg-accent-selected text-text-primary' : 'hover:bg-accent-subtle',
                 )}
               >
                 <span>{cmd.label}</span>
-                <span className="text-[11px] text-muted-foreground">{cmd.group}</span>
+                <span className="flex items-center gap-1.5 text-[11px] text-text-tertiary">
+                  {i === active ? <CornerDownLeft aria-hidden className="size-3" /> : null}
+                  {cmd.group}
+                </span>
               </div>
             ))
           )}

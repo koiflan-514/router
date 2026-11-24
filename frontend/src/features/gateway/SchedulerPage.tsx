@@ -1,4 +1,4 @@
-import { RefreshCw } from 'lucide-react';
+import { Boxes, RefreshCw } from 'lucide-react';
 import { PageHeader } from '@/components/shared/page-header';
 import { MetricCard } from '@/components/shared/metric-card';
 import { DataState } from '@/components/shared/states';
@@ -6,10 +6,12 @@ import { ActionButton } from '@/components/shared/action-button';
 import { ProviderChip, TimeText } from '@/components/shared/status';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Empty } from '@/components/ui/empty';
 import { Progress } from '@/components/ui/progress';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useGatewayStatus } from '@/lib/query';
 import { DASH, fmtCountdown, fmtDuration, fmtInt, fmtNumber, fmtPercent } from '@/lib/format';
+import { cn } from '@/lib/cn';
 import {
   CliCommand,
   GatewayUnreachable,
@@ -18,23 +20,120 @@ import {
   isUnreachable,
   useNow,
 } from './gateway-shared';
+import { schedulerLanes, type LaneStatus, type SchedulerLane } from './gateway-model';
 
-function dialectLabel(dialect: 'openai' | 'anthropic' | 'both'): string {
+function dialectLabel(dialect: 'openai' | 'anthropic' | 'both' | null): string {
   if (dialect === 'openai') return 'OpenAI';
   if (dialect === 'anthropic') return 'Anthropic';
-  return '双协议';
+  if (dialect === 'both') return '双协议';
+  return DASH;
 }
 
-/**
- * 冷却的唯一时间源：用同一个 `now` 判定是否还在冷却，并算出到期 ISO。
- * `cooldownUntil` 缺失/null/非有限数都视为“没有冷却”，绝不显示倒计时。
- */
-function cooldownIso(until: number | null | undefined, now: number): string | null {
-  if (typeof until !== 'number' || !Number.isFinite(until) || until <= now) return null;
-  return new Date(until).toISOString();
+function statusMeta(status: LaneStatus): {
+  label: string;
+  variant: 'success' | 'warning' | 'destructive' | 'muted' | 'info';
+} {
+  if (status === 'cooling') return { label: '冷却中', variant: 'warning' };
+  if (status === 'busy') return { label: '处理中', variant: 'info' };
+  if (status === 'running') return { label: '运行中', variant: 'success' };
+  if (status === 'stopped') return { label: '已停止', variant: 'muted' };
+  return { label: '未知', variant: 'muted' };
 }
 
-/** 调度快照：回答"这次为什么走了别家"。 */
+function successTone(rate: number): string {
+  if (rate >= 0.95) return '[&>div>div]:bg-success';
+  if (rate >= 0.8) return '[&>div>div]:bg-warning';
+  return '[&>div>div]:bg-destructive';
+}
+
+function LaneCard({ lane, now }: { lane: SchedulerLane; now: number }) {
+  const meta = statusMeta(lane.status);
+  const cooling = lane.cooldown.active;
+  return (
+    <Card className="flex h-full flex-col">
+      <div className="flex flex-wrap items-center gap-2 p-4 pb-2">
+        <ProviderChip id={lane.id} />
+        <Badge variant={meta.variant}>{meta.label}</Badge>
+        {cooling ? (
+          <Badge variant="warning">
+            {cooldownKindLabel(lane.cooldown.kind)} · {fmtCountdown(lane.cooldown.iso, now)}
+          </Badge>
+        ) : null}
+        <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+          {dialectLabel(lane.dialect)} · :{lane.port ?? DASH}
+        </span>
+      </div>
+
+      <div className="flex flex-1 flex-col gap-3 p-4 pt-2">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-baseline justify-between gap-2 text-xs">
+              <span className="text-muted-foreground">权重</span>
+              <span className="font-mono tabular-nums">{fmtNumber(lane.weight, 2)}</span>
+            </div>
+            <Progress value={lane.weightPct} aria-label={`权重 ${fmtNumber(lane.weight, 2)}`} />
+            <span className="text-[10px] text-muted-foreground">相对当前批次最大权重</span>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <div className="flex items-baseline justify-between gap-2 text-xs">
+              <span className="text-muted-foreground">并发</span>
+              <span className="font-mono tabular-nums">{fmtInt(lane.inFlight)}</span>
+            </div>
+            <Progress value={lane.loadPct} aria-label={`进行中请求 ${fmtInt(lane.inFlight)}`} />
+            <span className="text-[10px] text-muted-foreground">相对本批最大并发</span>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <div className="flex items-baseline justify-between gap-2 text-xs">
+            <span className="text-muted-foreground">成功率</span>
+            <span className="font-mono tabular-nums">{fmtPercent(lane.successRate, 1)}</span>
+          </div>
+          <div className={successTone(lane.successRate)}>
+            <Progress
+              value={Math.max(0, Math.min(100, lane.successRate * 100))}
+              aria-label={`成功率 ${fmtPercent(lane.successRate, 1)}`}
+            />
+          </div>
+        </div>
+
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+          <div className="flex items-baseline justify-between gap-2">
+            <dt className="text-muted-foreground">额度比</dt>
+            <dd className="font-mono tabular-nums">
+              {lane.quotaRatio === null ? DASH : fmtPercent(lane.quotaRatio, 0)}
+            </dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <dt className="text-muted-foreground">连续失败</dt>
+            <dd className={cn('font-mono tabular-nums', lane.consecutiveFails > 0 ? 'text-warning' : '')}>
+              {fmtInt(lane.consecutiveFails)}
+            </dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <dt className="text-muted-foreground">粘性会话</dt>
+            <dd className="font-mono tabular-nums">{fmtInt(lane.sticky)}</dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <dt className="text-muted-foreground">冷却</dt>
+            <dd className="text-right">
+              {cooling ? (
+                <span className="text-warning">
+                  {cooldownKindLabel(lane.cooldown.kind)} · {fmtCountdown(lane.cooldown.iso, now)}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">无</span>
+              )}
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </Card>
+  );
+}
+
+/** 调度快照：回答"这次为什么走了别家"。卡片是只读 lane，不提供调度开关。 */
 export function SchedulerPage() {
   const res = useGatewayStatus();
   const now = useNow(1000);
@@ -76,10 +175,10 @@ export function SchedulerPage() {
 
       <DataState res={res} loadingLabel="正在读取网关调度快照…" onRetry={res.refetch}>
         {(data) => {
-          const providers = data.providers;
-          const running = providers.filter((p) => p.running).length;
-          const cooling = providers.filter((p) => p.cooldownUntil != null && p.cooldownUntil > now).length;
-          const sticky = providers.reduce((acc, p) => acc + (p.sticky ?? 0), 0);
+          const lanes = schedulerLanes(data.providers, now);
+          const running = lanes.filter((lane) => lane.running).length;
+          const cooling = lanes.filter((lane) => lane.cooldown.active).length;
+          const sticky = lanes.reduce((acc, lane) => acc + lane.sticky, 0);
           const snapshotIso = data.quotaSnapshotAt ? new Date(data.quotaSnapshotAt).toISOString() : null;
 
           return (
@@ -103,88 +202,29 @@ export function SchedulerPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <MetricCard
                   label="上游在线"
-                  value={`${running} / ${providers.length}`}
-                  tone={providers.length > 0 && running === providers.length ? 'success' : 'warning'}
+                  value={`${running} / ${lanes.length}`}
+                  tone={lanes.length > 0 && running === lanes.length ? 'success' : 'warning'}
                 />
                 <MetricCard label="冷却中" value={fmtInt(cooling)} tone={cooling > 0 ? 'warning' : 'default'} />
                 <MetricCard label="粘性会话" value={fmtInt(sticky)} />
               </div>
 
-              <div className="overflow-hidden rounded-lg border border-border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Provider</TableHead>
-                      <TableHead>进程</TableHead>
-                      <TableHead>方言</TableHead>
-                      <TableHead>端口</TableHead>
-                      <TableHead className="text-right">权重</TableHead>
-                      <TableHead>额度比</TableHead>
-                      <TableHead className="text-right">并发</TableHead>
-                      <TableHead className="text-right">连续失败</TableHead>
-                      <TableHead className="text-right">成功率</TableHead>
-                      <TableHead>冷却</TableHead>
-                      <TableHead className="text-right">粘性</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {providers.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={11} className="py-6 text-center text-muted-foreground">
-                          网关已可达，但本批没有上游快照
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      providers.map((p) => {
-                        const cooldownUntil = p.cooldownUntil ?? null;
-                        const cdActive = cooldownUntil != null && cooldownUntil > now;
-                        const cdIso = cdActive && cooldownUntil != null ? new Date(cooldownUntil).toISOString() : null;
-                        return (
-                          <TableRow key={p.id}>
-                            <TableCell>
-                              <ProviderChip id={p.id} />
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={p.running ? 'success' : 'muted'}>{p.running ? '运行中' : '已停止'}</Badge>
-                            </TableCell>
-                            <TableCell className="text-muted-foreground">
-                              {p.dialect ? dialectLabel(p.dialect) : DASH}
-                            </TableCell>
-                            <TableCell className="font-mono tabular-nums">{p.port ?? DASH}</TableCell>
-                            <TableCell className="text-right tabular-nums">{fmtNumber(p.weight, 2)}</TableCell>
-                            <TableCell>
-                              {p.quotaRatio == null ? (
-                                <span className="text-muted-foreground">{DASH}</span>
-                              ) : (
-                                <div className="flex items-center gap-2">
-                                  <Progress value={p.quotaRatio * 100} className="w-16" />
-                                  <span className="tabular-nums">{fmtPercent(p.quotaRatio, 0)}</span>
-                                </div>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">{fmtInt(p.inFlight)}</TableCell>
-                            <TableCell className="text-right tabular-nums">{fmtInt(p.consecutiveFails)}</TableCell>
-                            <TableCell className="text-right tabular-nums">{fmtPercent(p.successRate, 1)}</TableCell>
-                            <TableCell>
-                              {cdActive ? (
-                                <Badge variant="warning">
-                                  冷却：{cooldownKindLabel(p.cooldownKind ?? null)} · 剩余 {fmtCountdown(cdIso, now)}
-                                </Badge>
-                              ) : (
-                                <span className="text-muted-foreground">{DASH}</span>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">{fmtInt(p.sticky ?? 0)}</TableCell>
-                          </TableRow>
-                        );
-                      })
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
+              {lanes.length === 0 ? (
+                <Empty
+                  icon={<Boxes />}
+                  title="网关已可达，但本批没有上游快照"
+                  description="没有 provider lane 可展示；稍后刷新或检查网关配置。"
+                />
+              ) : (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3">
+                  {lanes.map((lane) => (
+                    <LaneCard key={lane.id} lane={lane} now={now} />
+                  ))}
+                </div>
+              )}
 
               <InfoNote>
                 权重 =（额度比 × 10 + 闲置奖励 + 成功率 × 3）× 手动权重；{COOLDOWN_HINT}

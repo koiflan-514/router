@@ -6,6 +6,16 @@
     <!-- 生产模式由桥接服务在响应时注入一次性 token；开发模式留空。 -->
     <meta name="panel-token" content="" />
     <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#1b1b1f" />
+    <style>
+      /* 首屏底色：避免 JS 加载前白闪（Fluent Mica 基色）。 */
+      html { background: #1b1b1f; }
+      html.light { background: #f3f3f3; }
+      @media (prefers-color-scheme: light) {
+        html:not(.dark) { background: #f3f3f3; }
+      }
+      #root { min-height: 100%; }
+    </style>
     <title>Router 控制台</title>
   </head>
   <body>

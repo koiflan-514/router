@@ -9,6 +9,7 @@ const PAGES: Array<[string, string]> = [
   ['/logs', '日志'],
   ['/diagnostics', '诊断'],
   ['/usage', '用量'],
+  ['/reports', '报表'],
   ['/gateway', '调度快照'],
   ['/gateway/usage', '网关用量'],
   ['/settings', '设置'],
@@ -27,7 +28,7 @@ test.describe('网页面板（demo）', () => {
   test('总览显示 provider 与演示标记', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByText('trae-local').first()).toBeVisible();
-    await expect(page.getByText('DEMO').first()).toBeVisible();
+    await expect(page.getByText('演示', { exact: true }).first()).toBeVisible();
   });
 
   test('命令面板可用键盘打开', async ({ page }) => {

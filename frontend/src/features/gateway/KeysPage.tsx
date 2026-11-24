@@ -1,4 +1,5 @@
-import { KeyRound, RefreshCw } from 'lucide-react';
+import { Copy, KeyRound, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { PageHeader } from '@/components/shared/page-header';
@@ -65,6 +66,31 @@ function whitelist(values: string[]): string {
   return values.join('、');
 }
 
+/** 复制公开信息（前缀 / 名称）；密钥明文永远不会出现，因此不复制 secret。 */
+function CopyButton({ text, label }: { text: string; label: string }) {
+  async function onCopy() {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('当前环境不支持剪贴板');
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label}已复制`, { description: text });
+    } catch (err) {
+      toast.error('复制失败', { description: (err as Error).message });
+    }
+  }
+  return (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      aria-label={`复制${label}`}
+      title={`复制${label}`}
+      onClick={() => void onCopy()}
+      disabled={!text}
+    >
+      <Copy className="size-3.5" />
+    </Button>
+  );
+}
+
 function StateBadge({ state }: { state: KeyState }) {
   if (state === 'disabled') return <Badge variant="muted">已禁用</Badge>;
   if (state === 'enabled') return <Badge variant="success">启用中</Badge>;
@@ -101,7 +127,12 @@ function KeysTable({ keys }: { keys: KeyMeta[] }) {
             return (
               <TableRow key={k.id || k.prefix || i}>
                 <TableCell className="font-medium">{k.name || DASH}</TableCell>
-                <TableCell className="font-mono text-xs">{k.prefix || DASH}</TableCell>
+                <TableCell>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="font-mono text-xs">{k.prefix || DASH}</span>
+                    {k.prefix ? <CopyButton text={k.prefix} label="密钥前缀" /> : null}
+                  </span>
+                </TableCell>
                 <TableCell>
                   <StateBadge state={keyState(k)} />
                 </TableCell>
@@ -115,7 +146,11 @@ function KeysTable({ keys }: { keys: KeyMeta[] }) {
                         <span>{fmtInt(k.usedTokens)}</span>
                         <span className="text-muted-foreground">/ {fmtInt(quota)} tokens</span>
                       </div>
-                      <Progress value={pct ?? 0} />
+                      <Progress
+                        value={pct ?? 0}
+                        aria-label={`密钥 ${k.prefix || DASH} 已用 Token 占比`}
+                        aria-valuetext={`${Math.round(pct ?? 0)}%`}
+                      />
                     </div>
                   ) : (
                     <span className="text-xs text-muted-foreground">
@@ -209,6 +244,18 @@ export function KeysPage() {
         另：回环地址默认免密钥，且带了无效密钥也不拦——要收紧就设 <CliCommand>strict: true</CliCommand>，
         非回环来源永远需要有效密钥。
       </InfoNote>
+
+      {payload != null ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span>共 {keys.length} 个密钥</span>
+          <span aria-hidden>·</span>
+          <span>启用 {keys.filter((k) => keyState(k) === 'enabled').length}</span>
+          <span aria-hidden>·</span>
+          <span>禁用 {keys.filter((k) => keyState(k) === 'disabled').length}</span>
+          <span aria-hidden>·</span>
+          <span>状态未知 {keys.filter((k) => keyState(k) === 'unknown').length}</span>
+        </div>
+      ) : null}
 
       {stale ? <StaleNotice lastSuccessAt={lastSuccessAt} /> : null}
 

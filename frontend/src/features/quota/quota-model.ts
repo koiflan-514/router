@@ -198,3 +198,162 @@ export function sourceLabel(source: unknown): string {
   if (typeof source === 'string' && source.trim()) return `未知来源（${source.trim()}）`;
   return DASH;
 }
+
+export interface BucketGauge {
+  /** 0–100；总量缺失或剩余未知时为 null，绝不伪造进度。 */
+  pct: number | null;
+  remaining: number | null;
+  total: number | null;
+  used: number | null;
+  unit: string;
+  hasTotal: boolean;
+  hasRemaining: boolean;
+}
+
+/** 额度桶的可视化数值。只有 total > 0 且 remaining 是有限数时才给 pct。 */
+export function bucketGauge(bucket: QuotaBucket): BucketGauge {
+  const total = typeof bucket.total === 'number' && Number.isFinite(bucket.total) ? bucket.total : null;
+  const remaining =
+    typeof bucket.remaining === 'number' && Number.isFinite(bucket.remaining) ? bucket.remaining : null;
+  const hasTotal = total !== null && total > 0;
+  const pct =
+    hasTotal && remaining !== null ? Math.max(0, Math.min(100, (remaining / total) * 100)) : null;
+  let used: number | null = null;
+  if (typeof bucket.used === 'number' && Number.isFinite(bucket.used)) used = bucket.used;
+  else if (hasTotal && remaining !== null) used = Math.max(0, total - remaining);
+  return {
+    pct,
+    remaining,
+    total,
+    used,
+    unit: bucket.unit || '',
+    hasTotal,
+    hasRemaining: remaining !== null,
+  };
+}
+
+export type BucketStatus = 'days' | 'exhausted' | 'expiring' | 'low' | 'ok' | 'unknown';
+export type QuotaRowStatus = 'unavailable' | 'error' | 'issue' | 'ok';
+
+/** 单个桶的状态：天数桶单独；先判耗尽，再判即将过期，再判低余额。 */
+export function bucketStatus(bucket: QuotaBucket): BucketStatus {
+  if (isDaysBucket(bucket)) return 'days';
+  const gauge = bucketGauge(bucket);
+  if (gauge.remaining === 0) return 'exhausted';
+  if (typeof bucket.expiring === 'number' && bucket.expiring > 0) return 'expiring';
+  if (gauge.pct !== null && gauge.pct <= 20) return 'low';
+  if (gauge.pct !== null) return 'ok';
+  return 'unknown';
+}
+
+export function rowStatus(row: QuotaProviderLayer): QuotaRowStatus {
+  if (!row.available) return 'unavailable';
+  if (row.error) return 'error';
+  if (rowHasIssue(row)) return 'issue';
+  return 'ok';
+}
+
+const ROW_STATUS_RANK: Record<QuotaRowStatus, number> = {
+  error: 4,
+  unavailable: 3,
+  issue: 2,
+  ok: 1,
+};
+
+export function rowIssueCount(row: QuotaProviderLayer): number {
+  let count = 0;
+  if (!row.available) count += 1;
+  if (row.error) count += 1;
+  if (row.checkin?.supported && row.checkin.claimable) count += 1;
+  for (const bucket of bucketListOf(row)) {
+    const status = bucketStatus(bucket);
+    if (status === 'exhausted' || status === 'expiring' || status === 'low') count += 1;
+  }
+  return count;
+}
+
+export type QuotaFilter = 'all' | 'available' | 'unavailable' | 'issue';
+
+export function filterQuotaRows(rows: QuotaProviderLayer[], filter: QuotaFilter): QuotaProviderLayer[] {
+  if (filter === 'all') return rows;
+  if (filter === 'available') return rows.filter((row) => row.available);
+  if (filter === 'unavailable') return rows.filter((row) => !row.available);
+  return rows.filter(rowHasIssue);
+}
+
+export function countQuotaFilters(rows: QuotaProviderLayer[]): Record<QuotaFilter, number> {
+  return {
+    all: rows.length,
+    available: rows.filter((row) => row.available).length,
+    unavailable: rows.filter((row) => !row.available).length,
+    issue: rows.filter(rowHasIssue).length,
+  };
+}
+
+export type QuotaSortKey = 'severity' | 'title' | 'fetched';
+
+export interface QuotaSort {
+  key: QuotaSortKey;
+  dir: SortDirLike;
+}
+
+type SortDirLike = 'asc' | 'desc';
+
+export const DEFAULT_QUOTA_SORT: QuotaSort = { key: 'severity', dir: 'desc' };
+
+function compareQuotaRow(a: QuotaProviderLayer, b: QuotaProviderLayer, key: QuotaSortKey): number {
+  if (key === 'title') return a.title.localeCompare(b.title, 'zh-CN');
+  if (key === 'fetched') {
+    const ta = a.fetchedAt ? Date.parse(a.fetchedAt) : NaN;
+    const tb = b.fetchedAt ? Date.parse(b.fetchedAt) : NaN;
+    const va = Number.isFinite(ta) ? ta : -1;
+    const vb = Number.isFinite(tb) ? tb : -1;
+    return va - vb;
+  }
+  const ra = ROW_STATUS_RANK[rowStatus(a)];
+  const rb = ROW_STATUS_RANK[rowStatus(b)];
+  if (ra !== rb) return ra - rb;
+  const ia = rowIssueCount(a);
+  const ib = rowIssueCount(b);
+  if (ia !== ib) return ia - ib;
+  return a.title.localeCompare(b.title, 'zh-CN');
+}
+
+/** 稳定排序：同值时按 provider 名称兜底，避免行抖动。 */
+export function sortQuotaRows(rows: QuotaProviderLayer[], sort: QuotaSort): QuotaProviderLayer[] {
+  return [...rows].sort((a, b) => {
+    const cmp = compareQuotaRow(a, b, sort.key);
+    if (cmp !== 0) return sort.dir === 'asc' ? cmp : -cmp;
+    return a.provider.localeCompare(b.provider) || a.title.localeCompare(b.title, 'zh-CN');
+  });
+}
+
+export interface QuotaCoverage {
+  available: number;
+  total: number;
+  /** available / total；total=0 时为 null（不是 0%）。 */
+  ratio: number | null;
+}
+
+export function quotaCoverage(rows: QuotaProviderLayer[]): QuotaCoverage {
+  const available = rows.filter((row) => row.available).length;
+  return { available, total: rows.length, ratio: rows.length ? available / rows.length : null };
+}
+
+export function accountCount(row: QuotaProviderLayer): number {
+  return row.accounts.length;
+}
+
+export function checkinBadge(checkin: QuotaRow['checkin']): {
+  label: string;
+  variant: 'success' | 'warning' | 'muted' | 'info';
+} | null {
+  if (!checkin) return null;
+  if (checkin.supported && checkin.claimable) {
+    const reward = typeof checkin.rewardCredits === 'number' ? ` +${checkin.rewardCredits}` : '';
+    return { label: `签到可领${reward}`, variant: 'warning' };
+  }
+  if (checkin.supported && checkin.claimed) return { label: '今日已签到', variant: 'success' };
+  if (checkin.supported) return { label: '签到不可领', variant: 'muted' };
+  return { label: '不支持签到', variant: 'muted' };
+}

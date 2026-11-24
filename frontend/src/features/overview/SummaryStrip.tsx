@@ -24,10 +24,10 @@ function Stat({
       <TooltipTrigger asChild>
         <div
           tabIndex={0}
-          className="flex min-w-[7rem] flex-col gap-0.5 rounded-md px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="flex min-w-[6.5rem] flex-col gap-0.5 rounded-md px-2 py-1 outline-none transition-colors duration-150 hover:bg-accent-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
-          <span className="text-xs text-muted-foreground">{label}</span>
-          <span className={cn('text-lg font-semibold tabular-nums leading-none', toneClass)}>{value}</span>
+          <span className="text-[11px] text-text-secondary">{label}</span>
+          <span className={cn('font-display text-ramp-20 font-semibold tabular-nums leading-none', toneClass)}>{value}</span>
         </div>
       </TooltipTrigger>
       <TooltipContent>{hint}</TooltipContent>
@@ -54,9 +54,9 @@ export function SummaryStrip({
   const driftNames = providers.filter((p) => p.drift.length > 0).map((p) => p.id);
 
   return (
-    <Card className={className}>
-      <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2 p-3">
-        <span className="text-xs font-medium text-muted-foreground">汇总</span>
+    <Card className={cn('shadow-none', className)}>
+      <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2 p-2.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">汇总</span>
         <Stat label="已启用" value={`${fmtInt(s.enabled)} / ${fmtInt(s.total)}`} hint="on=true 的条目数（含网关叠加层）" />
         <Stat label="运行" value={`${fmtInt(s.running)} / ${fmtInt(s.total)}`} hint="up=true 的条目数，与已启用独立计算" />
         <Stat
@@ -79,7 +79,7 @@ export function SummaryStrip({
           <Stat label="可领取" value={fmtInt(claimable)} hint="后端显式 checkin.claimable=true 的来源数" />
         ) : null}
         {s.total ? (
-          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="ml-auto flex items-center gap-2 text-[11px] text-text-secondary">
             <Badge variant="info">叠加</Badge>
             <span>统一网关 on == up，不参与 on/off</span>
           </div>

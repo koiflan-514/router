@@ -3,75 +3,287 @@
 /* 深色由 <html class="dark"> 控制（shadcn 约定），而不是仅靠 prefers-color-scheme。 */
 @custom-variant dark (&:is(.dark *));
 
-:root {
-  --radius: 0.625rem;
+/* ==========================================================================
+ * Fluent 2 语义 token
+ *
+ * 两层职责：
+ * 1. `--accent-*` / `--neutral-*` / `--stroke-*` / `--text-*` 是 Fluent 原生语义层；
+ * 2. `--background` / `--card` / `--primary` … 是历史 shadcn 变量，全部映射到 Fluent 语义，
+ *    这样既有页面的 `bg-card` / `text-muted-foreground` / `border-border` 无需改动即可升级。
+ * ========================================================================== */
 
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+:root {
+  /* --- Fluent 基础：形状 / 动效 ------------------------------------------ */
+  --radius-2: 2px;
+  --radius-4: 4px;
+  --radius-8: 8px;
+  --radius-12: 12px;
+  --radius-16: 16px;
+  /* shadcn 兼容：--radius 仍是「卡片级」圆角 */
+  --radius: 8px;
+
+  --motion-fast: 150ms;
+  --motion-normal: 250ms;
+  --motion-curve: cubic-bezier(0.2, 0, 0, 1);
+  --ease-fluent: var(--motion-curve);
+
+  /* --- Fluent 层次：Mica / 卡片 / 弹层 ----------------------------------- */
+  /* surface-1 = 卡片，surface-2 = 内嵌块/工具条，surface-3 = 浮起元素 */
+  --surface-1: color-mix(in oklab, #ffffff 92%, #0f6cbd 8%);
+  --surface-2: color-mix(in oklab, #ffffff 85%, #0f6cbd 15%);
+  --surface-3: #ffffff;
+
+  --stroke-1: color-mix(in oklab, #101828 10%, transparent);
+  --stroke-2: color-mix(in oklab, #101828 16%, transparent);
+
+  --accent-rest: #0f6cbd;
+  --accent-hover: #115ea3;
+  --accent-pressed: #0f548c;
+  --accent-selected: color-mix(in oklab, #0f6cbd 12%, transparent);
+  --accent-subtle: color-mix(in oklab, #0f6cbd 7%, transparent);
+  --accent-on: #ffffff;
+
+  --text-primary: #1b1b1f;
+  --text-secondary: #4a4a52;
+  /* 11px 辅助文案要满足 WCAG AA 4.5:1（在其染色底上也有余量）。 */
+  --text-tertiary: #5c5c66;
+  --text-on-accent: #ffffff;
+
+  /* --- 状态色（Fluent status palette，浅色） -----------------------------
+   * 这些颜色同时用于「语义文字色 + 12%~14% 同色底」，取值已按 AA 4.5:1
+   * 在卡片底色与自身染色底上校核；比 Fluent 原始状态色略深一级。 */
+  --status-success: #0b6b0b;
+  --status-warning: #844d00;
+  --status-danger: #a92115;
+  --status-info: #0a5799;
+
+  /* --- 阴影：Fluent elevation ------------------------------------------- */
+  --shadow-2: 0 1px 2px color-mix(in oklab, #101828 10%, transparent), 0 0 1px color-mix(in oklab, #101828 8%, transparent);
+  --shadow-4: 0 2px 4px color-mix(in oklab, #101828 10%, transparent), 0 0 2px color-mix(in oklab, #101828 8%, transparent);
+  --shadow-8: 0 4px 8px color-mix(in oklab, #101828 12%, transparent), 0 0 2px color-mix(in oklab, #101828 10%, transparent);
+  --shadow-16: 0 8px 16px color-mix(in oklab, #101828 14%, transparent), 0 0 2px color-mix(in oklab, #101828 10%, transparent);
+  --shadow-flyout: 0 16px 32px color-mix(in oklab, #101828 18%, transparent), 0 0 8px color-mix(in oklab, #101828 8%, transparent);
+
+  /* --- Mica 底色：非常轻的层叠渐变，不做重纹理 --------------------------- */
+  --mica-base: #f3f3f3;
+  --mica-layer-a: color-mix(in oklab, #0f6cbd 6%, transparent);
+  --mica-layer-b: color-mix(in oklab, #7f56d9 4%, transparent);
+
+  /* --- 历史 shadcn 变量（↓ 全部映射到上面） ------------------------------ */
+  --background: var(--mica-base);
+  --foreground: var(--text-primary);
+  --card: var(--surface-1);
+  --card-foreground: var(--text-primary);
+  --popover: var(--surface-3);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent-rest);
+  --primary-foreground: var(--accent-on);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--text-secondary);
+  --accent: var(--accent-selected);
+  --accent-foreground: var(--text-primary);
+  --destructive: var(--status-danger);
+  --destructive-foreground: #ffffff;
+  --border: var(--stroke-1);
+  --input: var(--stroke-2);
+  --ring: var(--accent-rest);
 
   /* 语义状态色（对齐 06 设计系统；不是唯一表意手段） */
-  --success: oklch(0.62 0.14 150);
-  --success-foreground: oklch(0.98 0 0);
-  --warning: oklch(0.75 0.15 75);
-  --warning-foreground: oklch(0.2 0 0);
-  --info: oklch(0.62 0.13 245);
-  --info-foreground: oklch(0.98 0 0);
+  --success: var(--status-success);
+  --success-foreground: #ffffff;
+  --warning: var(--status-warning);
+  --warning-foreground: #ffffff;
+  --info: var(--status-info);
+  --info-foreground: #ffffff;
 
   /* Provider 分类色（对齐 00 设计基线 §10 / 06 设计系统 §3） */
   --provider-codearts: oklch(0.6 0.18 300);
-  --provider-qoder-cn: oklch(0.65 0.13 195);
-  --provider-qoder: oklch(0.6 0.16 255);
-  --provider-trae-local: oklch(0.65 0.16 150);
-  --provider-workbuddy: oklch(0.78 0.15 85);
-  --provider-workbuddy-global: oklch(0.72 0.13 300);
-  --provider-zcode: oklch(0.68 0.16 55);
-  --provider-loomy: oklch(0.62 0.2 350);
-  --provider-raccoon: oklch(0.64 0.17 25);
-  --provider-gateway: oklch(0.6 0.02 250);
-  --provider-default: oklch(0.6 0.02 250);
+  --provider-qoder-cn: oklch(0.6 0.13 195);
+  --provider-qoder: oklch(0.58 0.16 255);
+  --provider-trae-local: oklch(0.58 0.15 150);
+  --provider-workbuddy: oklch(0.63 0.13 75);
+  --provider-workbuddy-global: oklch(0.6 0.14 300);
+  --provider-zcode: oklch(0.62 0.16 50);
+  --provider-loomy: oklch(0.6 0.19 350);
+  --provider-raccoon: oklch(0.6 0.17 25);
+  --provider-gateway: oklch(0.5 0.02 250);
+  --provider-default: oklch(0.5 0.02 250);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 12%);
-  --input: oklch(1 0 0 / 16%);
-  --ring: oklch(0.556 0 0);
+  --surface-1: color-mix(in oklab, #2b2b32 88%, #479ef5 12%);
+  --surface-2: color-mix(in oklab, #ffffff 6%, #1f1f24);
+  --surface-3: #2c2c33;
 
-  --success: oklch(0.7 0.15 150);
-  --warning: oklch(0.8 0.15 80);
-  --info: oklch(0.7 0.13 245);
+  --stroke-1: color-mix(in oklab, #ffffff 12%, transparent);
+  --stroke-2: color-mix(in oklab, #ffffff 18%, transparent);
+
+  --accent-rest: #62b0f8;
+  --accent-hover: #7cc1f7;
+  --accent-pressed: #4a9df0;
+  --accent-selected: color-mix(in oklab, #479ef5 18%, transparent);
+  --accent-subtle: color-mix(in oklab, #479ef5 10%, transparent);
+  --accent-on: #0b1220;
+
+  --text-primary: #f3f3f3;
+  --text-secondary: #c2c2cc;
+  --text-tertiary: #b0b0ba;
+
+  --status-success: #70cc70;
+  --status-warning: #f7c85c;
+  --status-danger: #ffa8b1;
+  --status-info: #86c8f8;
+
+  --shadow-2: 0 1px 2px rgb(0 0 0 / 40%), 0 0 1px rgb(0 0 0 / 60%);
+  --shadow-4: 0 2px 6px rgb(0 0 0 / 44%), 0 0 2px rgb(0 0 0 / 60%);
+  --shadow-8: 0 6px 12px rgb(0 0 0 / 48%), 0 0 2px rgb(0 0 0 / 60%);
+  --shadow-16: 0 10px 22px rgb(0 0 0 / 52%), 0 0 2px rgb(0 0 0 / 60%);
+  --shadow-flyout: 0 20px 40px rgb(0 0 0 / 60%), 0 0 8px rgb(0 0 0 / 40%);
+
+  --mica-base: #1b1b1f;
+  --mica-layer-a: color-mix(in oklab, #479ef5 10%, transparent);
+  --mica-layer-b: color-mix(in oklab, #7f56d9 8%, transparent);
+
+  /* 历史变量在深色下需要单独覆盖（不能只靠上游 token 继承） */
+  --background: var(--mica-base);
+  --foreground: var(--text-primary);
+  --card: var(--surface-1);
+  --card-foreground: var(--text-primary);
+  --popover: var(--surface-3);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent-rest);
+  --primary-foreground: var(--accent-on);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--text-secondary);
+  --accent: var(--accent-selected);
+  --accent-foreground: var(--text-primary);
+  --destructive: var(--status-danger);
+  --destructive-foreground: #1b1b1f;
+  --border: var(--stroke-1);
+  --input: var(--stroke-2);
+  --ring: var(--accent-rest);
+
+  --success: var(--status-success);
+  --success-foreground: #0b1220;
+  --warning: var(--status-warning);
+  --warning-foreground: #1b1b1f;
+  --info: var(--status-info);
+  --info-foreground: #0b1220;
+
+  --provider-codearts: oklch(0.72 0.16 300);
+  --provider-qoder-cn: oklch(0.74 0.12 195);
+  --provider-qoder: oklch(0.72 0.14 255);
+  --provider-trae-local: oklch(0.74 0.14 150);
+  --provider-workbuddy: oklch(0.8 0.12 80);
+  --provider-workbuddy-global: oklch(0.74 0.13 300);
+  --provider-zcode: oklch(0.76 0.14 55);
+  --provider-loomy: oklch(0.74 0.16 350);
+  --provider-raccoon: oklch(0.74 0.15 25);
+  --provider-gateway: oklch(0.78 0.02 250);
+  --provider-default: oklch(0.78 0.02 250);
+}
+
+/* 高对比：优先 `prefers-contrast`，其次允许 `<html class="high-contrast">` 手动切换。 */
+:root.high-contrast {
+  --surface-1: #ffffff;
+  --surface-2: #ffffff;
+  --surface-3: #ffffff;
+  --stroke-1: #000000;
+  --stroke-2: #000000;
+  --accent-rest: #003a7a;
+  --accent-hover: #002a5c;
+  --accent-pressed: #001c3d;
+  --accent-selected: #cfe4fa;
+  --text-primary: #000000;
+  --text-secondary: #1a1a1a;
+  --text-tertiary: #2b2b2b;
+  --status-success: #005a00;
+  --status-warning: #6b3d00;
+  --status-danger: #8f1508;
+  --status-info: #003a7a;
+  --mica-base: #ffffff;
+  --mica-layer-a: transparent;
+  --mica-layer-b: transparent;
+  --background: #ffffff;
+  --foreground: #000000;
+  --card: #ffffff;
+  --card-foreground: #000000;
+  --popover: #ffffff;
+  --popover-foreground: #000000;
+  --primary: #003a7a;
+  --primary-foreground: #ffffff;
+  --muted: #ffffff;
+  --muted-foreground: #1a1a1a;
+  --border: #000000;
+  --input: #000000;
+  --ring: #003a7a;
+  --success: #005a00;
+  --warning: #6b3d00;
+  --info: #003a7a;
+  --destructive: #8f1508;
+}
+
+:root.high-contrast.dark,
+:root.dark.high-contrast {
+  --surface-1: #000000;
+  --surface-2: #000000;
+  --surface-3: #000000;
+  --stroke-1: #ffffff;
+  --stroke-2: #ffffff;
+  --accent-rest: #8ecbff;
+  --accent-hover: #b4dcff;
+  --accent-pressed: #5cb0f0;
+  --accent-selected: #0a3a63;
+  --text-primary: #ffffff;
+  --text-secondary: #eaeaea;
+  --text-tertiary: #d6d6d6;
+  --status-success: #6ee06e;
+  --status-warning: #ffd75c;
+  --status-danger: #ffb0b8;
+  --status-info: #8ecbff;
+  --mica-base: #000000;
+  --mica-layer-a: transparent;
+  --mica-layer-b: transparent;
+  --background: #000000;
+  --foreground: #ffffff;
+  --card: #000000;
+  --card-foreground: #ffffff;
+  --popover: #000000;
+  --popover-foreground: #ffffff;
+  --primary: #8ecbff;
+  --primary-foreground: #000000;
+  --muted: #000000;
+  --muted-foreground: #eaeaea;
+  --border: #ffffff;
+  --input: #ffffff;
+  --ring: #8ecbff;
+  --destructive: #ffb0b8;
+  --success: #6ee06e;
+  --warning: #ffd75c;
+  --info: #8ecbff;
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --surface-1: color-mix(in oklab, #ffffff 100%, transparent);
+    --stroke-1: color-mix(in oklab, #101828 34%, transparent);
+    --stroke-2: color-mix(in oklab, #101828 48%, transparent);
+    --text-secondary: #31313a;
+    --text-tertiary: #44444e;
+    --accent-rest: #0b4f8c;
+  }
+  .dark {
+    --surface-1: #232329;
+    --stroke-1: color-mix(in oklab, #ffffff 34%, transparent);
+    --stroke-2: color-mix(in oklab, #ffffff 48%, transparent);
+    --text-secondary: #dcdce4;
+    --text-tertiary: #c4c4ce;
+    --accent-rest: #7cc0f8;
+  }
 }
 
 @theme inline {
@@ -101,13 +313,42 @@
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  /* Fluent 语义层也可直接当 Tailwind 工具类使用：bg-surface-1 / border-stroke-1 / text-text-secondary */
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-stroke-1: var(--stroke-1);
+  --color-stroke-2: var(--stroke-2);
+  --color-accent-rest: var(--accent-rest);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-pressed: var(--accent-pressed);
+  --color-accent-selected: var(--accent-selected);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  --font-mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  --radius-sm: var(--radius-4);
+  --radius-md: var(--radius-8);
+  --radius-lg: var(--radius-8);
+  --radius-xl: var(--radius-12);
+  --radius-2xl: var(--radius-16);
+
+  --font-sans: 'Segoe UI Variable Text', 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui,
+    -apple-system, 'PingFang SC', sans-serif;
+  --font-display: 'Segoe UI Variable Display', 'Segoe UI Variable Text', 'Segoe UI', 'Microsoft YaHei UI',
+    system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', ui-monospace, 'JetBrains Mono', Consolas, monospace;
+
+  --text-ramp-12: 12px;
+  --text-ramp-14: 14px;
+  --text-ramp-16: 16px;
+  --text-ramp-20: 20px;
+  --text-ramp-28: 28px;
+
+  --shadow-2: var(--shadow-2);
+  --shadow-4: var(--shadow-4);
+  --shadow-8: var(--shadow-8);
+  --shadow-16: var(--shadow-16);
 }
 
 @layer base {
@@ -120,15 +361,29 @@
     height: 100%;
   }
   body {
-    background-color: var(--background);
+    background-color: var(--mica-base);
     color: var(--foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     font-size: 14px;
+    /* Fluent type ramp 基线：12/14 正文，16 次标题，20/28 标题 */
+    line-height: 1.45;
+    letter-spacing: 0.01em;
   }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+  /* Fluent focus rectangle：2px accent 描边 + 2px offset，键盘可见 */
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--accent-selected);
+    color: var(--text-primary);
   }
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -137,7 +392,99 @@
       animation-duration: 0.01ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
     }
+  }
+}
+
+/* ==========================================================================
+ * Fluent 工具类（可组合，非组件专属）
+ * ========================================================================== */
+
+/* Mica：应用底色。极轻的双层 radial 渐变 + 基础底色，避免"重纹理"。 */
+@utility mica {
+  background-color: var(--mica-base);
+  background-image:
+    radial-gradient(120% 80% at 0% 0%, var(--mica-layer-a) 0%, transparent 55%),
+    radial-gradient(100% 70% at 100% 0%, var(--mica-layer-b) 0%, transparent 60%);
+  background-attachment: fixed;
+}
+
+/* Acrylic：弹层 / 抽屉 / 命令面板。半透明 + 模糊 + 细描边。 */
+@utility acrylic {
+  background-color: color-mix(in oklab, var(--surface-3) 78%, transparent);
+  -webkit-backdrop-filter: blur(30px) saturate(125%);
+  backdrop-filter: blur(30px) saturate(125%);
+  border: 1px solid var(--stroke-1);
+}
+
+/* 兼容/降级：不支持 backdrop-filter 时退回不透明表面，保证可读。 */
+@supports not (backdrop-filter: blur(1px)) {
+  .acrylic {
+    background-color: var(--surface-3);
+  }
+}
+
+@utility fluent-focus {
+  outline: none;
+  &:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@utility layer-1 {
+  background-color: var(--surface-1);
+  border: 1px solid var(--stroke-1);
+  border-radius: var(--radius-8);
+  box-shadow: var(--shadow-2);
+}
+
+@utility layer-2 {
+  background-color: var(--surface-2);
+  border: 1px solid var(--stroke-1);
+  border-radius: var(--radius-4);
+}
+
+@utility elevation-2 {
+  box-shadow: var(--shadow-2);
+}
+
+@utility elevation-4 {
+  box-shadow: var(--shadow-4);
+}
+
+@utility elevation-8 {
+  box-shadow: var(--shadow-8);
+}
+
+@utility elevation-16 {
+  box-shadow: var(--shadow-16);
+}
+
+/* 页面进入：轻微 fade + translateY(4px)，250ms Fluent 曲线。 */
+@utility page-enter {
+  animation: page-enter var(--motion-normal) var(--motion-curve) both;
+}
+
+/* 内容流式栅格由各页面用 grid-cols 表达（1/2/3 列自适应），这里只保留共享的间距节奏。 */
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  [class*='page-enter'] {
+    animation: none !important;
+    transform: none !important;
   }
 }
 
@@ -157,5 +504,36 @@
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+/* 抽屉左右滑入（150ms / 250ms Fluent 曲线） */
+@keyframes sheet-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes sheet-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes sheet-in-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

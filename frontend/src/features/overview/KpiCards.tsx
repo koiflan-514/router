@@ -17,18 +17,21 @@ export function UsageKpiCards({ usage }: { usage: UsageStats }) {
         value={`${fmtInt(k.sessions)} / ${fmtInt(k.prompts)}`}
         sub={k.subagents > 0 ? `子会话 ${fmtInt(k.subagents)}` : '无子会话'}
         hint="来源：OpenCode 会话统计（近 7 天）"
+        density="compact"
       />
       <MetricCard
         label="会话步骤"
         value={fmtInt(k.steps)}
         sub="单位：steps"
         hint="会话步骤，不等于 HTTP 请求数"
+        density="compact"
       />
       <MetricCard
         label="Token 构成（入+出+推）"
         value={`${fmtCompact(k.tokenTotal)} Token`}
         sub={`入 ${fmtCompact(k.input)} · 出 ${fmtCompact(k.output)} · 推 ${fmtCompact(k.reasoning)}`}
         hint={`缓存读 ${fmtCompact(k.cacheRead)} · 缓存写 ${fmtCompact(k.cacheWrite)}（不并入构成）`}
+        density="compact"
       />
       <MetricCard
         label="工具成功率"
@@ -42,6 +45,7 @@ export function UsageKpiCards({ usage }: { usage: UsageStats }) {
               : '成功 /（成功+失败）；不等于模型请求成功率'
         }
         tone={k.toolRate !== null && k.toolRate < 0.9 ? 'warning' : 'default'}
+        density="compact"
       />
     </section>
   );

@@ -37,7 +37,7 @@ export function AttentionList({
         {flagged.map((p) => (
           <div
             key={p.id}
-            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border px-3 py-2 text-xs"
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-stroke-1 px-3 py-2 text-xs"
           >
             <span className="font-medium">{p.title}</span>
             <span className="text-muted-foreground">{stateComboText(p)}</span>
@@ -50,16 +50,16 @@ export function AttentionList({
               <Link
                 to="/providers"
                 search={{ provider: p.id }}
-                className="rounded text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
-                aria-label={`在服务页处理 ${p.title}`}
+                className="rounded text-primary underline-offset-4 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                aria-label={`去服务页：处理 ${p.title}`}
               >
                 去服务页
               </Link>
               <Link
                 to="/logs"
                 search={{ provider: p.id }}
-                className="rounded text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
-                aria-label={`查看 ${p.title} 日志`}
+                className="rounded text-primary underline-offset-4 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                aria-label={`查看日志：${p.title}`}
               >
                 查看日志
               </Link>

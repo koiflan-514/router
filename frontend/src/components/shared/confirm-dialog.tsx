@@ -62,7 +62,7 @@ export function ConfirmDialog({
         {hasDetails ? (
           <dl
             id={detailsId}
-            className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-md border border-border bg-muted/30 p-3 text-xs"
+            className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-md border border-stroke-1 bg-muted/30 p-3 text-xs"
           >
             {details?.map((d) => (
               <div key={d.label} className="contents">

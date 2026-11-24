@@ -95,7 +95,7 @@ export function ProviderDetailSheet({
                     key={l.to}
                     to={l.to}
                     search={{ provider: provider.id }}
-                    className="rounded border border-border px-2.5 py-1 outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50"
+                    className="rounded border border-stroke-1 px-2.5 py-1 outline-none transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                   >
                     前往{l.label}
                   </Link>

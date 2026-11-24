@@ -1,33 +1,60 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ArrowDownUp, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Empty } from '@/components/ui/empty';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { MetricCard } from '@/components/shared/metric-card';
 import { PageHeader } from '@/components/shared/page-header';
 import { ProviderSelect } from '@/components/shared/provider-select';
-import { QuotaBar } from '@/components/shared/quota-bar';
 import { DataState } from '@/components/shared/states';
 import { ProviderChip, TimeText } from '@/components/shared/status';
 import type { QuotaBucket, QuotaRow } from '@/lib/contract';
-import { DASH, fmtDate, fmtNumber } from '@/lib/format';
+import { DASH, fmtNumber, fmtPercent } from '@/lib/format';
+import { cn } from '@/lib/cn';
 import { clampText } from '@/lib/redact';
 import { useProviders, useQuota } from '@/lib/query';
+import { QuotaGauge } from './QuotaGauge';
 import {
-  bucketExpiryIso,
-  fmtUtcDateTime,
-  isDaysBucket,
-  isDerivedExpiry,
+  DEFAULT_QUOTA_SORT,
+  accountCount,
+  checkinBadge,
+  countQuotaFilters,
+  filterQuotaRows,
   isWorkBuddyProvider,
   normalizeQuotaRow,
-  rowHasIssue,
+  quotaCoverage,
+  rowIssueCount,
+  rowStatus,
+  sortQuotaRows,
   sourceLabel,
   summarizeQuota,
-  workbuddyBucketLabel,
+  type QuotaFilter,
   type QuotaProviderLayer,
+  type QuotaSort,
+  type QuotaSortKey,
 } from './quota-model';
+
+const FILTERS: Array<{ value: QuotaFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'available', label: '可查' },
+  { value: 'unavailable', label: '不可用' },
+  { value: 'issue', label: '需处理' },
+];
+
+const SORT_OPTIONS: Array<{ value: QuotaSortKey; label: string }> = [
+  { value: 'severity', label: '问题优先' },
+  { value: 'title', label: '名称' },
+  { value: 'fetched', label: '采集时间' },
+];
 
 /** 页面级 `r` 刷新（对齐 03 §5.5）：输入/弹层聚焦时不触发。 */
 function useRefreshHotkey(refetch: () => void) {
@@ -45,62 +72,32 @@ function useRefreshHotkey(refetch: () => void) {
   }, [refetch]);
 }
 
+/** 倒计时用的低频时钟（30s），不制造每秒重渲染。 */
+function useTick(intervalMs = 30_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
 function serviceText(running: boolean | undefined): string {
   if (running === true) return '服务在线';
   if (running === false) return '服务未运行';
   return '服务状态未知';
 }
 
-/** 单个额度桶：credits/tokens 画条；`days` 只给天数与 UTC 到期日。 */
-function BucketBlock({
-  bucket,
-  baseIso,
-  workbuddy,
-}: {
-  bucket: QuotaBucket;
-  baseIso: string | null;
-  workbuddy: boolean;
-}) {
-  if (isDaysBucket(bucket)) {
-    const expiry = bucketExpiryIso(bucket, baseIso);
-    const derived = expiry !== null && isDerivedExpiry(bucket);
-    return (
-      <div className="flex flex-col gap-1 rounded-md border border-border bg-muted/20 p-2 text-xs">
-        <div className="flex items-baseline justify-between gap-3">
-          <span className="font-medium">
-            {workbuddy ? workbuddyBucketLabel(bucket) : bucket.label || '凭证有效期'}
-          </span>
-          <span className="tabular-nums">
-            {typeof bucket.remaining === 'number' ? `${fmtNumber(bucket.remaining)} 天` : DASH}
-          </span>
-        </div>
-        <div className="text-muted-foreground">
-          到期 {expiry ? fmtUtcDateTime(expiry) : DASH}
-          {derived ? '（按采集时间 + 剩余天数推算）' : ''}
-          <span className="mx-1">·</span>天数不并入 credits 汇总
-        </div>
-      </div>
-    );
+function RowStatusBadge({ row }: { row: QuotaProviderLayer }) {
+  const status = rowStatus(row);
+  if (status === 'unavailable') {
+    return <Badge variant="destructive">不可用</Badge>;
   }
-
-  return (
-    <div className="flex flex-col gap-1">
-      <QuotaBar bucket={bucket} />
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-        {typeof bucket.used === 'number' ? (
-          <span>
-            已用 {fmtNumber(bucket.used)} {bucket.unit}
-          </span>
-        ) : null}
-        {bucket.resetDate ? <span>重置 {fmtDate(bucket.resetDate)}</span> : null}
-        {typeof bucket.expiring === 'number' && bucket.expiring > 0 ? (
-          <span className="text-warning">
-            即将过期 {fmtNumber(bucket.expiring)} {bucket.unit}
-          </span>
-        ) : null}
-      </div>
-    </div>
-  );
+  if (status === 'error') return <Badge variant="destructive">采集失败</Badge>;
+  if (status === 'issue') {
+    return <Badge variant="warning">需处理 {rowIssueCount(row)}</Badge>;
+  }
+  return <Badge variant="success">正常</Badge>;
 }
 
 /** 签到：能力由后端决定；统一签到命令尚未接入，故只读说明（不发明 ActionName）。 */
@@ -110,7 +107,7 @@ function CheckinLine({ checkin }: { checkin: QuotaRow['checkin'] }) {
 
   if (checkin.supported && checkin.claimable) {
     return (
-      <div className="flex flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2 rounded-md bg-warning/10 p-2 text-xs">
         <span className="font-medium text-warning">
           签到可领取{reward !== null ? ` ${fmtNumber(reward)} credits` : ''}
         </span>
@@ -145,26 +142,61 @@ function CheckinLine({ checkin }: { checkin: QuotaRow['checkin'] }) {
   );
 }
 
-function ProviderQuotaCard({ row, baseFetchedAt }: { row: QuotaProviderLayer; baseFetchedAt: string | null }) {
+function BucketGrid({
+  buckets,
+  baseIso,
+  workbuddy,
+  now,
+}: {
+  buckets: QuotaBucket[];
+  baseIso: string | null;
+  workbuddy: boolean;
+  now: number;
+}) {
+  if (!buckets.length) {
+    return <div className="text-xs text-muted-foreground">没有可展示的额度桶</div>;
+  }
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {buckets.map((bucket) => (
+        <QuotaGauge
+          key={bucket.id}
+          bucket={bucket}
+          baseIso={baseIso}
+          workbuddy={workbuddy}
+          now={now}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ProviderQuotaCard({
+  row,
+  baseFetchedAt,
+  now,
+}: {
+  row: QuotaProviderLayer;
+  baseFetchedAt: string | null;
+  now: number;
+}) {
   const workbuddy = isWorkBuddyProvider(row.provider, row.kind);
   const accountBuckets = row.accounts.some((a) => a.buckets.length > 0);
   const rowFetchedAt = row.fetchedAt ?? baseFetchedAt;
+  const checkin = checkinBadge(row.checkin);
 
   return (
-    <Card>
+    <Card className="flex h-full flex-col">
       <CardHeader className="gap-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <ProviderChip id={row.provider} title={row.title} />
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            {workbuddy ? <Badge variant="info">凭证有效期</Badge> : null}
-            {row.available ? (
-              <Badge variant="success">可查</Badge>
-            ) : (
-              <Badge variant="destructive">不可用</Badge>
-            )}
-            {row.error ? <Badge variant="destructive">采集失败</Badge> : null}
+          {row.kind ? <span className="font-mono text-[11px] text-muted-foreground">{row.kind}</span> : null}
+          <RowStatusBadge row={row} />
+          {workbuddy ? <Badge variant="info">凭证有效期</Badge> : null}
+          {checkin ? <Badge variant={checkin.variant}>{checkin.label}</Badge> : null}
+          <div className="ml-auto flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1">
-              来源采集 <TimeText iso={rowFetchedAt} />
+              采集 <TimeText iso={rowFetchedAt} />
             </span>
             <Button size="sm" variant="ghost" asChild>
               <Link to="/accounts" search={{ provider: row.provider }}>
@@ -173,6 +205,33 @@ function ProviderQuotaCard({ row, baseFetchedAt }: { row: QuotaProviderLayer; ba
             </Button>
           </div>
         </div>
+
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span
+            className={
+              row.serviceRunning === true
+                ? 'text-success'
+                : row.serviceRunning === false
+                  ? 'text-warning'
+                  : 'text-muted-foreground'
+            }
+          >
+            {serviceText(row.serviceRunning)}
+          </span>
+          <span>
+            账号{' '}
+            <span className="font-mono text-foreground">
+              {row.account ?? (accountCount(row) ? `${accountCount(row)} 个` : DASH)}
+            </span>
+          </span>
+          {workbuddy ? <span>凭证天数单独展示，不并入 credits</span> : null}
+        </div>
+        {!accountBuckets && row.accounts.length ? (
+          <div className="text-xs text-muted-foreground">
+            账号明细：<span className="text-foreground">{row.accounts.map((account) => account.label).join('、')}</span>
+          </div>
+        ) : null}
+
         {!row.available ? (
           <div className="text-xs text-destructive">
             不可用{row.reason ? `：${row.reason}` : ''}
@@ -183,63 +242,47 @@ function ProviderQuotaCard({ row, baseFetchedAt }: { row: QuotaProviderLayer; ba
           <div className="text-xs text-destructive">采集失败：{clampText(row.error, 200)}</div>
         ) : null}
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {workbuddy ? (
-          <div className="text-xs text-muted-foreground">{serviceText(row.serviceRunning)} · 凭证有效期</div>
-        ) : null}
 
+      <CardContent className="flex flex-1 flex-col gap-3">
         {accountBuckets ? (
-          row.accounts.map((account) => (
-            <div key={account.id} className="flex flex-col gap-2 rounded-md border border-border p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span className="font-medium">{account.label}</span>
-                <span className="font-mono text-muted-foreground">{account.account ?? account.id}</span>
-              </div>
-              {!account.available ? (
-                <div className="text-xs text-destructive">
-                  不可用{account.reason ? `：${account.reason}` : ''}
-                  {account.detail ? ` · ${account.detail}` : ''}
+          <div className="flex flex-col gap-3">
+            {row.accounts.map((account, i) => (
+              <section
+                key={account.id}
+                className={cn('flex flex-col gap-2', i > 0 ? 'border-t border-border pt-3' : '')}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="inline-flex items-center gap-2 font-medium">
+                    {account.label}
+                    {!account.available ? <Badge variant="destructive">不可用</Badge> : null}
+                  </span>
+                  <span className="font-mono text-muted-foreground">{account.account ?? account.id}</span>
                 </div>
-              ) : null}
-              {account.error ? (
-                <div className="text-xs text-destructive">采集失败：{clampText(account.error, 200)}</div>
-              ) : null}
-              {account.buckets.length ? (
-                account.buckets.map((bucket) => (
-                  <BucketBlock
-                    key={bucket.id}
-                    bucket={bucket}
-                    baseIso={rowFetchedAt}
-                    workbuddy={workbuddy}
-                  />
-                ))
-              ) : (
-                <div className="text-xs text-muted-foreground">没有可展示的额度桶</div>
-              )}
-            </div>
-          ))
-        ) : row.buckets.length ? (
-          <>
-            {row.account ? (
-              <div className="text-xs text-muted-foreground">
-                账号 <span className="font-mono">{row.account}</span>
-              </div>
-            ) : null}
-            {row.buckets.map((bucket) => (
-              <BucketBlock key={bucket.id} bucket={bucket} baseIso={rowFetchedAt} workbuddy={workbuddy} />
+                {!account.available ? (
+                  <div className="text-xs text-destructive">
+                    不可用{account.reason ? `：${account.reason}` : ''}
+                    {account.detail ? ` · ${account.detail}` : ''}
+                  </div>
+                ) : null}
+                {account.error ? (
+                  <div className="text-xs text-destructive">采集失败：{clampText(account.error, 200)}</div>
+                ) : null}
+                <BucketGrid
+                  buckets={account.buckets}
+                  baseIso={rowFetchedAt}
+                  workbuddy={workbuddy}
+                  now={now}
+                />
+              </section>
             ))}
-          </>
+          </div>
         ) : (
-          <div className="text-xs text-muted-foreground">没有可展示的额度桶</div>
+          <BucketGrid buckets={row.buckets} baseIso={rowFetchedAt} workbuddy={workbuddy} now={now} />
         )}
 
-        {workbuddy ? (
-          <div className="text-[11px] text-muted-foreground">
-            此来源没有可比较的 credits 余额；凭证 / 续期天数不并入积分口径。
-          </div>
-        ) : null}
-
-        <CheckinLine checkin={row.checkin} />
+        <div className="mt-auto">
+          <CheckinLine checkin={row.checkin} />
+        </div>
       </CardContent>
     </Card>
   );
@@ -249,6 +292,7 @@ export function QuotaPage() {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const rawProvider = typeof search.provider === 'string' && search.provider ? search.provider : undefined;
   const navigate = useNavigate();
+  const now = useTick();
 
   const providersRes = useProviders();
   const knownProviders = providersRes.data ?? [];
@@ -258,7 +302,8 @@ export function QuotaPage() {
   const provider = providerUnknown ? undefined : rawProvider;
 
   const res = useQuota(provider);
-  const [onlyIssues, setOnlyIssues] = useState(false);
+  const [filter, setFilter] = useState<QuotaFilter>('all');
+  const [sort, setSort] = useState<QuotaSort>(DEFAULT_QUOTA_SORT);
 
   const setProvider = useCallback(
     (next?: string) => {
@@ -288,7 +333,12 @@ export function QuotaPage() {
     [res.data],
   );
   const summary = useMemo(() => summarizeQuota(layers), [layers]);
-  const visible = onlyIssues ? layers.filter(rowHasIssue) : layers;
+  const coverage = useMemo(() => quotaCoverage(layers), [layers]);
+  const counts = useMemo(() => countQuotaFilters(layers), [layers]);
+  const visible = useMemo(
+    () => sortQuotaRows(filterQuotaRows(layers, filter), sort),
+    [layers, filter, sort],
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -303,14 +353,6 @@ export function QuotaPage() {
               onChange={setProvider}
               className="w-44"
             />
-            <Button
-              size="sm"
-              variant={onlyIssues ? 'default' : 'outline'}
-              aria-pressed={onlyIssues}
-              onClick={() => setOnlyIssues((v) => !v)}
-            >
-              仅看需处理
-            </Button>
             <Button size="sm" variant="outline" onClick={refetch}>
               <RefreshCw />
               刷新
@@ -341,11 +383,17 @@ export function QuotaPage() {
         {(payload) => {
           return (
             <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <MetricCard
                   label="可查来源数"
                   value={`${summary.sources} / ${summary.total}`}
                   sub="available=true 的来源"
+                />
+                <MetricCard
+                  label="额度覆盖"
+                  value={coverage.ratio === null ? DASH : fmtPercent(coverage.ratio, 0)}
+                  sub={`${coverage.available} / ${coverage.total} 家可查`}
+                  hint="只统计来源可用性，不跨厂商求和"
                 />
                 <MetricCard
                   label="需处理提醒数"
@@ -380,14 +428,77 @@ export function QuotaPage() {
                 </Card>
               ) : null}
 
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div
+                  role="group"
+                  aria-label="按状态筛选额度"
+                  className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-border bg-muted/40 p-1 text-xs"
+                >
+                  {FILTERS.map((item) => {
+                    const active = filter === item.value;
+                    return (
+                      <button
+                        key={item.value}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setFilter(item.value)}
+                        className={cn(
+                          'rounded-md px-2.5 py-1 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50',
+                          active
+                            ? 'bg-background text-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        {item.label}
+                        <span className="ml-1 tabular-nums opacity-70">{counts[item.value]}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={sort.key}
+                    onValueChange={(value) => setSort((prev) => ({ ...prev, key: value as QuotaSortKey }))}
+                  >
+                    <SelectTrigger className="w-32" aria-label="额度排序方式">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SORT_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    aria-label={sort.dir === 'desc' ? '当前降序，点击改为升序' : '当前升序，点击改为降序'}
+                    onClick={() => setSort((prev) => ({ ...prev, dir: prev.dir === 'desc' ? 'asc' : 'desc' }))}
+                  >
+                    <ArrowDownUp className="size-4" />
+                    {sort.dir === 'desc' ? '降序' : '升序'}
+                  </Button>
+                </div>
+              </div>
+
               {visible.length ? (
-                visible.map((row) => (
-                  <ProviderQuotaCard key={row.provider} row={row} baseFetchedAt={payload.fetchedAt} />
-                ))
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                  {visible.map((row) => (
+                    <ProviderQuotaCard
+                      key={row.provider}
+                      row={row}
+                      baseFetchedAt={payload.fetchedAt}
+                      now={now}
+                    />
+                  ))}
+                </div>
               ) : (
                 <Empty
-                  title="当前没有被标记为需处理的来源"
-                  description="“仅看需处理”已开启；关闭筛选可查看全部额度桶。"
+                  title={filter === 'issue' ? '当前没有需处理的来源' : '当前筛选下没有来源'}
+                  description="调整状态筛选或切换 provider 可查看其余额度桶。"
                 />
               )}
             </div>

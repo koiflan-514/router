@@ -13,6 +13,7 @@ const ALL_PAGES = [
   '/logs',
   '/diagnostics',
   '/usage',
+  '/reports',
   '/gateway',
   '/gateway/usage',
   '/gateway/combos',

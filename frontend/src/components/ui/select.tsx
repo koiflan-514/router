@@ -11,7 +11,7 @@ export function SelectTrigger({ className, children, ...props }: ComponentProps<
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        'flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:truncate',
+        'flex h-8 w-full items-center justify-between gap-2 rounded-[4px] border border-stroke-2 bg-surface-2 px-2.5 py-1 text-ramp-14 outline-none transition-[border-color] duration-150 hover:border-accent-rest/50 focus-visible:border-accent-rest focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 [&>span]:truncate',
         className,
       )}
       {...props}
@@ -30,7 +30,7 @@ export function SelectContent({ className, children, position = 'popper', ...pro
       <SelectPrimitive.Content
         position={position}
         className={cn(
-          'z-50 max-h-72 min-w-[8rem] overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md',
+          'acrylic z-50 max-h-72 min-w-[8rem] overflow-hidden rounded-lg p-1 text-popover-foreground shadow-flyout',
           className,
         )}
         {...props}
@@ -45,7 +45,7 @@ export function SelectItem({ className, children, ...props }: ComponentProps<typ
   return (
     <SelectPrimitive.Item
       className={cn(
-        'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+        'relative flex w-full cursor-default select-none items-center rounded-[4px] py-1.5 pl-8 pr-2 text-ramp-14 outline-none focus:bg-accent-selected focus:text-text-primary data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
         className,
       )}
       {...props}

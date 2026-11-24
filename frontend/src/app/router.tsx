@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import {
   createRootRoute,
   createRoute,
@@ -36,7 +37,38 @@ const LocalAnswersPage = lazyRouteComponent(
   () => import('@/features/gateway/LocalAnswersPage'),
   'LocalAnswersPage',
 );
+const ReportsPage = lazyRouteComponent(() => import('@/features/reports/ReportsPage'), 'ReportsPage');
 const SettingsPage = lazyRouteComponent(() => import('@/features/settings/SettingsPage'), 'SettingsPage');
+
+/**
+ * 懒加载路由的统一 Suspense 包装：外壳（侧边/顶栏）先渲染，页面 chunk 到达后替换
+ * 局部 fallback，不阻塞整页。`lazyRouteComponent` 若已被 TanStack 包好 Suspense，
+ * 这层只是幂等的兜底。
+ */
+type RouteComponent = () => React.ReactElement | null;
+
+function withSuspense(Component: React.ComponentType<any>): RouteComponent {
+  return function LazyRoute() {
+    return (
+      <Suspense fallback={<RoutePending />}>
+        <Component />
+      </Suspense>
+    );
+  };
+}
+
+const Suspended = {
+  OverviewPage: withSuspense(OverviewPage as React.ComponentType),
+  ProvidersPage: withSuspense(ProvidersPage as React.ComponentType),
+  QuotaPage: withSuspense(QuotaPage as React.ComponentType),
+  AccountsPage: withSuspense(AccountsPage as React.ComponentType),
+  LogsPage: withSuspense(LogsPage as React.ComponentType),
+  DiagnosticsPage: withSuspense(DiagnosticsPage as React.ComponentType),
+  UsagePage: withSuspense(UsagePage as React.ComponentType),
+  ReportsPage: withSuspense(ReportsPage as React.ComponentType),
+  SettingsPage: withSuspense(SettingsPage as React.ComponentType),
+  GatewayLayout: withSuspense(GatewayLayout as React.ComponentType),
+};
 
 /** 搜索参数即状态：保持页面自己约定的一组键（provider/range/lines/filter…）。 */
 const keepSearch = (search: Record<string, unknown>): Record<string, unknown> => search;
@@ -80,55 +112,61 @@ const rootRoute = createRootRoute({ component: AppShell, notFoundComponent: NotF
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  component: OverviewPage,
+  component: Suspended.OverviewPage,
 });
 const providersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/providers',
-  component: ProvidersPage,
+  component: Suspended.ProvidersPage,
   validateSearch: keepSearch,
 });
 const quotaRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/quota',
-  component: QuotaPage,
+  component: Suspended.QuotaPage,
   validateSearch: keepSearch,
 });
 const accountsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/accounts',
-  component: AccountsPage,
+  component: Suspended.AccountsPage,
   validateSearch: keepSearch,
 });
 const logsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/logs',
-  component: LogsPage,
+  component: Suspended.LogsPage,
   validateSearch: keepSearch,
 });
 const diagnosticsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/diagnostics',
-  component: DiagnosticsPage,
+  component: Suspended.DiagnosticsPage,
   validateSearch: keepSearch,
 });
 const usageRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/usage',
-  component: UsagePage,
+  component: Suspended.UsagePage,
+  validateSearch: keepSearch,
+});
+const reportsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reports',
+  component: Suspended.ReportsPage,
   validateSearch: keepSearch,
 });
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  component: SettingsPage,
+  component: Suspended.SettingsPage,
   validateSearch: keepSearch,
 });
 
 const gatewayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/gateway',
-  component: GatewayLayout,
+  component: Suspended.GatewayLayout,
   validateSearch: keepSearch,
 });
 const gatewayIndexRoute = createRoute({
@@ -171,6 +209,7 @@ const routeTree = rootRoute.addChildren([
   logsRoute,
   diagnosticsRoute,
   usageRoute,
+  reportsRoute,
   settingsRoute,
   gatewayRoute.addChildren([
     gatewayIndexRoute,

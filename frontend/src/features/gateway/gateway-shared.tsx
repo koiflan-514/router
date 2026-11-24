@@ -18,28 +18,8 @@ export function useNow(intervalMs = 1000): number {
   return now;
 }
 
-/**
- * 冷却原因分类（对齐 `gateway/failure.mjs` 的词汇）→ 中文。
- * 未识别的分类**保留原文**，不猜测。
- */
-const COOLDOWN_KINDS: Record<string, string> = {
-  auth: '凭据失效',
-  permission: '权限受限',
-  billing: '额度不足',
-  rate_limit: '限流',
-  overloaded: '上游过载',
-  context_window: '上下文溢出',
-  invalid_request: '请求非法',
-  upstream: '上游错误',
-  upstream_5xx: '上游 5xx',
-  upstream_4xx: '上游 4xx',
-  timeout: '超时',
-};
-
-export function cooldownKindLabel(kind: string | null | undefined): string {
-  if (!kind) return '未知原因';
-  return COOLDOWN_KINDS[kind] ?? kind;
-}
+/** 冷却原因分类 → 中文；未识别的分类原样保留，不猜测（实现见 gateway-model）。 */
+export { cooldownKindLabel } from './gateway-model';
 
 /** 只把"桥接/网关不可达"当作可达性问题，其他错误仍按普通失败呈现。 */
 export function isUnreachable(error: { code: string } | null): boolean {

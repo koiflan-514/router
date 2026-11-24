@@ -1,8 +1,10 @@
-import { Cloud } from 'lucide-react';
+import { Cloud, Copy } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { toast } from 'sonner';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataState } from '@/components/shared/states';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Empty } from '@/components/ui/empty';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useGatewayFree } from '@/lib/query';
@@ -19,6 +21,31 @@ function statusBadge(p: FreeProvider): ReactNode {
 
 function isPending(p: FreeProvider): boolean {
   return p.status === 'needs-key' || (!p.hasKey && !p.local);
+}
+
+/** 只复制公开的 base URL；key 值永远不会出现在面板数据里。 */
+function CopyUrlButton({ url }: { url: string }) {
+  async function onCopy() {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('当前环境不支持剪贴板');
+      await navigator.clipboard.writeText(url);
+      toast.success('Base URL 已复制', { description: url });
+    } catch (err) {
+      toast.error('复制失败', { description: (err as Error).message });
+    }
+  }
+  return (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      aria-label="复制 Base URL"
+      title="复制 Base URL"
+      disabled={!url}
+      onClick={() => void onCopy()}
+    >
+      <Copy className="size-3.5" />
+    </Button>
+  );
 }
 
 function FreeTable({ providers }: { providers: FreeProvider[] }) {
@@ -51,8 +78,11 @@ function FreeTable({ providers }: { providers: FreeProvider[] }) {
                   {isPending(p) ? <span className="text-xs text-muted-foreground">待配置</span> : null}
                 </div>
               </TableCell>
-              <TableCell className="max-w-56 truncate font-mono text-xs" title={p.baseUrl}>
-                {p.baseUrl || DASH}
+              <TableCell className="max-w-56 font-mono text-xs" title={p.baseUrl}>
+                <span className="inline-flex items-center gap-1">
+                  <span className="truncate">{p.baseUrl || DASH}</span>
+                  {p.baseUrl ? <CopyUrlButton url={p.baseUrl} /> : null}
+                </span>
               </TableCell>
               <TableCell className="max-w-64 text-xs text-muted-foreground">{p.note || DASH}</TableCell>
             </TableRow>

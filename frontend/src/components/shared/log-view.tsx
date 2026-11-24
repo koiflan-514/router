@@ -36,7 +36,7 @@ export function LogView({
   return (
     <div className={cn('relative', className)}>
       {truncated ? (
-        <div className="border-b border-border bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground">
+        <div className="border-b border-stroke-1 bg-muted/40 px-3 py-1 text-[11px] text-muted-foreground">
           仅显示最近 {maxLines} 行
         </div>
       ) : null}
@@ -44,7 +44,7 @@ export function LogView({
         role="log"
         aria-live="off"
         tabIndex={0}
-        className="max-h-full overflow-auto whitespace-pre-wrap break-all p-3 font-mono text-[12px] leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="max-h-full overflow-auto whitespace-pre-wrap break-all p-3 font-mono text-[12px] leading-relaxed outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
         {lines.map((line, i) => (
           <div key={i} className="min-h-[1.2em]">

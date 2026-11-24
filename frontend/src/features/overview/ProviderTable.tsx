@@ -2,9 +2,11 @@ import { ArrowDown, ArrowUp, ChevronsUpDown, Search, X } from 'lucide-react';
 import { Link } from '@tanstack/react-router';
 import { AuthBadge, DriftBadges, ProviderChip, StatusDot } from '@/components/shared/status';
 import { ProviderSelect } from '@/components/shared/provider-select';
+import { Toolbar } from '@/components/shared/surface';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Progress } from '@/components/ui/progress';
 import {
   Table,
   TableBody,
@@ -18,6 +20,7 @@ import { DASH, fmtInt } from '@/lib/format';
 import type { ProviderStatus } from '@/lib/contract';
 import {
   driftDetailText,
+  quotaBarFor,
   quotaSummaryText,
   type QuotaIndex,
   type SortDir,
@@ -48,14 +51,14 @@ function SortHeader({
         type="button"
         onClick={() => onSort(sortKey)}
         className={cn(
-          'inline-flex items-center gap-1 rounded outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50',
+          'inline-flex items-center gap-1 rounded-[4px] px-1 py-0.5 text-[11px] font-semibold uppercase tracking-wide outline-none transition-colors duration-150 hover:text-text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
           align === 'right' && 'flex-row-reverse',
-          active && 'text-foreground',
+          active && 'text-text-primary',
         )}
         title={`按${label}排序`}
       >
         {label}
-        <Icon className="size-3.5" aria-hidden />
+        <Icon className="size-3" aria-hidden />
       </button>
     </TableHead>
   );
@@ -77,9 +80,9 @@ export function ProviderFilters({
 }) {
   const filtered = Boolean(q || provider);
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <Toolbar aria-label="provider 筛选" surface={false} className="px-0 py-0">
       <div className="relative min-w-[12rem] flex-1">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-tertiary" aria-hidden />
         <Input
           type="search"
           value={q}
@@ -109,8 +112,8 @@ export function ProviderFilters({
           清除筛选
         </Button>
       ) : null}
-      <span className="text-xs text-muted-foreground">共 {fmtInt(providers.length)} 条</span>
-    </div>
+      <span className="text-[11px] text-text-tertiary">共 {fmtInt(providers.length)} 条</span>
+    </Toolbar>
   );
 }
 
@@ -150,7 +153,31 @@ function ClientCell({ p }: { p: ProviderStatus }) {
   );
 }
 
-/** 总览 Provider 表：四态独立徽标 + models(null≠0) + 可选额度摘要 + 跨页跳转。 */
+/** 额度单元格：摘要文字 + 可算占比时的一条细进度条。 */
+function QuotaCell({ row }: { row: Parameters<typeof quotaBarFor>[0] }) {
+  const text = quotaSummaryText(row);
+  const bar = quotaBarFor(row);
+  return (
+    <div className="flex max-w-[11rem] flex-col gap-1">
+      <span className="truncate text-[11px] text-text-secondary" title={text}>
+        {text}
+      </span>
+      {bar ? (
+        <Progress
+          value={bar.pct}
+          aria-label={`${bar.label}剩余占比`}
+          aria-valuetext={`${Math.round(bar.pct)}%`}
+          className="h-1"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * 总览 Provider 矩阵：四态独立徽标 + models(null≠0) + 额度条 + 漂移 badge。
+ * 保留原有所有列、排序、选中与列表语义（仅视觉改为 Fluent 紧凑密度）。
+ */
 export function ProviderTable({
   providers,
   quotaIndex,
@@ -169,7 +196,7 @@ export function ProviderTable({
   selectedId?: string;
 }) {
   return (
-    <Table>
+    <Table containerProps={{ 'aria-label': 'provider 状态矩阵，可横向滚动' }}>
       <TableHeader>
         <TableRow>
           <SortHeader label="Provider" sortKey="id" activeKey={sortKey} dir={sortDir} onSort={onSort} />
@@ -180,19 +207,18 @@ export function ProviderTable({
           <SortHeader label="漂移" sortKey="drift" activeKey={sortKey} dir={sortDir} onSort={onSort} />
           <SortHeader label="端口" sortKey="port" activeKey={sortKey} dir={sortDir} onSort={onSort} align="right" />
           <SortHeader label="模型数" sortKey="models" activeKey={sortKey} dir={sortDir} onSort={onSort} align="right" />
-          <TableHead>额度摘要</TableHead>
+          <TableHead>额度</TableHead>
           <TableHead>跳转</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {providers.map((p) => {
           const selected = selectedId === p.id;
-          const quota = p.overlay ? DASH : quotaSummaryText(quotaIndex.get(p.id));
           return (
             <TableRow
               key={p.id}
               data-selected={selected ? 'true' : undefined}
-              className={cn('cursor-pointer', selected && 'bg-accent/60')}
+              className={cn('cursor-pointer', selected && 'bg-accent-selected')}
               onClick={() => onSelect(p.id)}
             >
               <TableCell>
@@ -202,12 +228,12 @@ export function ProviderTable({
                     e.stopPropagation();
                     onSelect(p.id);
                   }}
-                  className="flex items-center gap-2 rounded outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                  aria-label={`查看 ${p.title}（${p.id}）详情`}
+                  className="flex items-center gap-2 rounded-[4px] px-1 py-0.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                   aria-expanded={selected}
                 >
                   <ProviderChip id={p.id} title={p.title} />
                   {p.overlay ? <Badge variant="info">叠加</Badge> : null}
+                  <span className="sr-only">查看详情</span>
                 </button>
               </TableCell>
               <TableCell>
@@ -222,24 +248,28 @@ export function ProviderTable({
               <TableCell>
                 <ClientCell p={p} />
               </TableCell>
-              <TableCell className="max-w-[15rem]">
+              <TableCell className="max-w-[13rem]">
                 <DriftBadges drift={p.drift} />
                 {p.drift.length ? (
-                  <div className="mt-0.5 text-[11px] text-muted-foreground">{driftDetailText(p)}</div>
+                  <div className="mt-0.5 text-[10px] text-text-tertiary">{driftDetailText(p)}</div>
                 ) : null}
               </TableCell>
-              <TableCell className="text-right font-mono tabular-nums">{p.port > 0 ? p.port : DASH}</TableCell>
-              <TableCell className="text-right font-mono tabular-nums">{p.models === null ? DASH : fmtInt(p.models)}</TableCell>
-              <TableCell className="max-w-[12rem] text-xs text-muted-foreground">{quota}</TableCell>
+              <TableCell className="text-right font-mono text-[11px] tabular-nums">
+                {p.port > 0 ? p.port : DASH}
+              </TableCell>
+              <TableCell className="text-right font-mono text-[11px] tabular-nums">
+                {p.models === null ? DASH : fmtInt(p.models)}
+              </TableCell>
+              <TableCell>{p.overlay ? <span className="text-text-tertiary">{DASH}</span> : <QuotaCell row={quotaIndex.get(p.id)} />}</TableCell>
               <TableCell>
-                <div className="flex items-center gap-2 text-xs">
+                <div className="flex items-center gap-2 text-[11px]">
                   {DESTINATIONS.map((d) => (
                     <Link
                       key={d.to}
                       to={d.to}
                       search={{ provider: p.id }}
                       onClick={(e) => e.stopPropagation()}
-                      className="rounded text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
+                      className="rounded text-accent-rest underline-offset-4 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                       aria-label={`在${d.label}页查看 ${p.title}`}
                     >
                       {d.label}

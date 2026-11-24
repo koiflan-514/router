@@ -1,4 +1,5 @@
 import { PageHeader } from '@/components/shared/page-header';
+import { Badge } from '@/components/ui/badge';
 import { DataState } from '@/components/shared/states';
 import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -29,7 +30,7 @@ function SwitchCell({ value }: { value: boolean | undefined }) {
   return (
     <span className="inline-flex items-center gap-2">
       <Switch checked={value} disabled aria-label={value ? '已开启（只读）' : '已关闭（只读）'} />
-      <span className={value ? 'text-foreground' : 'text-muted-foreground'}>{value ? '开启' : '关闭'}</span>
+      <Badge variant={value ? 'success' : 'muted'}>{value ? '开启' : '关闭'}</Badge>
     </span>
   );
 }
@@ -63,8 +64,25 @@ export function LocalAnswersPage() {
         {(switches) => {
           const known = new Set(SPECS.map((s) => s.key));
           const extraKeys = Object.keys(switches).filter((k) => !known.has(k));
+          const allKeys = [...SPECS.map((s) => s.key), ...extraKeys];
+          const on = allKeys.filter((k) => switches[k] === true).length;
+          const off = allKeys.filter((k) => switches[k] === false).length;
+          const unknown = allKeys.length - on - off;
           return (
             <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                <span>共 {allKeys.length} 项</span>
+                <span aria-hidden>·</span>
+                <span className="text-success">开启 {on}</span>
+                <span aria-hidden>·</span>
+                <span>关闭 {off}</span>
+                {unknown > 0 ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span>未知 {unknown}</span>
+                  </>
+                ) : null}
+              </div>
               <div className="overflow-hidden rounded-lg border border-border">
                 <Table>
                   <TableHeader>

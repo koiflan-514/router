@@ -41,7 +41,7 @@ function TaskItem({ task, onDismiss }: { task: Task; onDismiss: (id: string) => 
       : Date.now() - Date.parse(task.startedAt);
   const output = [task.stdout, task.stderr].filter(Boolean).join('\n');
   return (
-    <div className="rounded-md border border-border p-2.5">
+    <div className="layer-2 p-2.5">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -70,7 +70,7 @@ function TaskItem({ task, onDismiss }: { task: Task; onDismiss: (id: string) => 
       </div>
       <div className="mt-1 font-mono text-[10px] text-muted-foreground">{task.actionId}</div>
       {open && output ? (
-        <div className="mt-2 max-h-64 overflow-auto rounded border border-border bg-muted/30">
+        <div className="mt-2 max-h-64 overflow-auto rounded border border-stroke-1 bg-muted/30">
           <LogView text={output} maxLines={400} />
         </div>
       ) : null}
@@ -86,9 +86,9 @@ export function TaskCenter() {
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="outline" size="sm">
+        <Button variant="ghost" size="sm" className="gap-1.5">
           <ListTodo className="size-4" />
-          任务
+          <span className="hidden sm:inline">任务</span>
           {activeCount ? <Badge variant="info">{activeCount}</Badge> : null}
         </Button>
       </SheetTrigger>

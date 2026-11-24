@@ -9,8 +9,12 @@ import { Empty } from '@/components/ui/empty';
 import { useUsage } from '@/lib/query';
 import { DASH, fmtDateTime } from '@/lib/format';
 import { ActivityChart } from './ActivityChart';
+import { CacheEfficiencyCard } from './CacheEfficiencyCard';
+import { ExportCsvButton } from './ExportCsvButton';
 import { ModelsTable } from './ModelsTable';
 import { RangeSwitch } from './RangeSwitch';
+import { TokenComposition } from './TokenComposition';
+import { ToolsReliability } from './ToolsReliability';
 import { UsageKpis } from './UsageKpis';
 import {
   isSortDir,
@@ -77,6 +81,12 @@ export function UsagePage() {
             <span className="text-[11px] text-muted-foreground">
               最后成功 {res.lastSuccessAt ? fmtDateTime(res.lastSuccessAt) : DASH}
             </span>
+            <ExportCsvButton
+              data={res.data}
+              models={sortedModels}
+              range={range}
+              disabled={!res.data || isUsageEmpty(res.data)}
+            />
             <Button variant="outline" size="sm" onClick={() => res.refetch()}>
               <RefreshCw className="size-4" />
               刷新
@@ -117,7 +127,16 @@ export function UsagePage() {
         {(data) => (
           <div className="flex flex-col gap-4">
             <UsageKpis data={data} />
-            <ActivityChart data={data} range={range} />
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+              <div className="xl:col-span-2">
+                <ActivityChart data={data} range={range} />
+              </div>
+              <TokenComposition data={data} />
+            </div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <ToolsReliability data={data} />
+              <CacheEfficiencyCard data={data} />
+            </div>
             <ModelsTable
               rows={sortedModels}
               sort={sort}
