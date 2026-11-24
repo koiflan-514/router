@@ -2,8 +2,8 @@
 
 本仓库的 `integrations/` 下放了几套反代实现的源码快照。它们各自保留原许可证，
 router 只负责启动、停止和写 opencode provider，不改变它们的协议行为。
-本仓库自身编写的代码以根目录 [MIT License](LICENSE) 发布；下方列出的第三方目录
-不受该 MIT 许可覆盖，仍以各自许可证为准。
+本仓库自身编写的代码以根目录 [BSD 3-Clause License](LICENSE) 发布；下方列出的第三方目录
+不受该 BSD 许可覆盖，仍以各自许可证为准。
 `integrations/loomy2api`、`integrations/raccoon2api` 与 `integrations/qwenwork2api` 是本
 仓库自写的零依赖 Node 代理（未复制第三方代码），仅对接讯飞 Loomy / 商汤小浣熊 / 千问办公
 各自公开的 OpenAI（或 Anthropic）兼容端点，故不在此表列出。
