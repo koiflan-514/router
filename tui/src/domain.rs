@@ -117,6 +117,17 @@ impl Provider {
         }
     }
 
+    /// 窄表格用的短标签：和 `client_label` 语义一致，只压缩「用户自管」。
+    pub fn client_short(&self) -> &'static str {
+        if self.oc_user_owned {
+            "自管"
+        } else if self.oc {
+            "已写入"
+        } else {
+            "未写入"
+        }
+    }
+
     /// 网关是叠加层：`router.mjs list` 把它的 `on` 直接取进程状态，
     /// 它不参与 on/off 的开关语义，也不能用「开关≠进程」判断漂移。
     pub fn overlay(&self) -> bool {

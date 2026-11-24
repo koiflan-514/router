@@ -12,6 +12,35 @@ use crate::redact::sanitize_lines;
 
 const NOTICE_TTL: Duration = Duration::from_secs(12);
 
+/// 用量页模型表排序维度。`t` 仍只负责时间范围，排序用 `s` 循环。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageSort {
+    Steps,
+    Tokens,
+    Cost,
+    Name,
+}
+
+impl UsageSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Steps => "步骤",
+            Self::Tokens => "Token",
+            Self::Cost => "成本",
+            Self::Name => "名称",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Steps => Self::Tokens,
+            Self::Tokens => Self::Cost,
+            Self::Cost => Self::Name,
+            Self::Name => Self::Steps,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Overview,
@@ -101,14 +130,14 @@ impl<T> Resource<T> {
         self.error = None;
     }
 
-    fn succeed(&mut self, data: T) {
+    pub(crate) fn succeed(&mut self, data: T) {
         self.data = Some(data);
         self.last_success = Some(Instant::now());
         self.error = None;
         self.refreshing = false;
     }
 
-    fn fail(&mut self, error: String) {
+    pub(crate) fn fail(&mut self, error: String) {
         self.error = Some(error);
         self.refreshing = false;
     }
@@ -129,6 +158,8 @@ pub struct QuotaLine {
     pub total: Option<f64>,
     pub unit: String,
     pub status: String,
+    /// 额度重置日（上游可选）。额度页用它替代「数据时间」，避免把采集时间当成重置日。
+    pub reset_date: Option<String>,
     pub fetched_at: Option<String>,
     pub detail: String,
 }
@@ -253,6 +284,7 @@ pub struct App {
     pub credits: Resource<CreditsSnapshot>,
     pub usage: Resource<UsageSnapshot>,
     pub usage_range: UsageRange,
+    pub usage_sort: UsageSort,
     pub usage_model_cursor: usize,
     pub provider_cursor: usize,
     pub account_cursor: usize,
@@ -298,6 +330,7 @@ impl App {
             credits: Resource::default(),
             usage: Resource::default(),
             usage_range: UsageRange::Week,
+            usage_sort: UsageSort::Steps,
             usage_model_cursor: 0,
             provider_cursor: 0,
             account_cursor: 0,
@@ -341,14 +374,6 @@ impl App {
 
     pub fn account_data(&self) -> Option<&AccountSnapshot> {
         self.accounts.data.as_ref()
-    }
-
-    pub fn selected_usage_model(&self) -> Option<&ModelUsage> {
-        let snapshot = self.usage.data.as_ref()?;
-        snapshot.models.get(
-            self.usage_model_cursor
-                .min(snapshot.models.len().saturating_sub(1)),
-        )
     }
 
     pub fn selected_provider(&self) -> Option<&Provider> {
@@ -511,6 +536,52 @@ impl App {
         self.usage.begin(request_id);
         self.pending_requests
             .push(RefreshRequest::Usage(request_id));
+    }
+
+    /// 排序只影响展示顺序，不触发新的后端请求。
+    pub fn cycle_usage_sort(&mut self) {
+        self.usage_sort = self.usage_sort.next();
+        self.usage_model_cursor = 0;
+    }
+
+    /// 按当前排序返回模型索引（原下标，用于详情与光标映射）。
+    pub fn sorted_model_indices(&self) -> Vec<usize> {
+        let Some(snapshot) = self.usage.data.as_ref() else {
+            return Vec::new();
+        };
+        let mut indices: Vec<usize> = (0..snapshot.models.len()).collect();
+        match self.usage_sort {
+            UsageSort::Name => indices.sort_by(|a, b| {
+                snapshot.models[*a]
+                    .model
+                    .id
+                    .cmp(&snapshot.models[*b].model.id)
+            }),
+            UsageSort::Steps => {
+                indices.sort_by(|a, b| snapshot.models[*b].steps.cmp(&snapshot.models[*a].steps))
+            }
+            UsageSort::Tokens => indices.sort_by(|a, b| {
+                snapshot.models[*b]
+                    .tokens
+                    .visible_total()
+                    .cmp(&snapshot.models[*a].tokens.visible_total())
+            }),
+            UsageSort::Cost => indices.sort_by(|a, b| {
+                snapshot.models[*b]
+                    .cost
+                    .partial_cmp(&snapshot.models[*a].cost)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+        }
+        indices
+    }
+
+    /// 排序后光标位置的模型。
+    pub fn sorted_usage_model(&self) -> Option<&ModelUsage> {
+        let snapshot = self.usage.data.as_ref()?;
+        let indices = self.sorted_model_indices();
+        let index = *indices.get(self.usage_model_cursor.min(indices.len().saturating_sub(1)))?;
+        snapshot.models.get(index)
     }
 
     pub fn cycle_usage_range(&mut self) {
@@ -922,6 +993,7 @@ impl App {
             KeyCode::Char('t') | KeyCode::Char('[') | KeyCode::Char(']') => {
                 self.cycle_usage_range()
             }
+            KeyCode::Char('s') => self.cycle_usage_sort(),
             KeyCode::Left | KeyCode::Char('h') => self.move_selection(-1),
             KeyCode::Right | KeyCode::Char('l') => self.move_selection(1),
             _ => {}
@@ -929,7 +1001,7 @@ impl App {
     }
 
     fn show_usage_detail(&mut self) {
-        let Some(model) = self.selected_usage_model() else {
+        let Some(model) = self.sorted_usage_model() else {
             self.set_notice("当前没有可查看的模型用量。", true);
             return;
         };
@@ -1768,6 +1840,7 @@ fn quota_lines_for_row(row: &QuotaRow) -> Vec<QuotaLine> {
             total: None,
             unit: String::new(),
             status: row.status_summary(),
+            reset_date: None,
             fetched_at,
             detail: format!(
                 "来源类型：{}\n{}",
@@ -1831,6 +1904,7 @@ fn quota_lines_for_row(row: &QuotaRow) -> Vec<QuotaLine> {
                     } else {
                         flags.join(" · ")
                     },
+                    reset_date: account.reset_date.clone(),
                     fetched_at: fetched_at.clone(),
                     detail: format!(
                         "来源类型：{}\n共享来源状态：{}\n重置日：{}\n权益包：{}",
@@ -1886,6 +1960,7 @@ fn quota_lines_for_row(row: &QuotaRow) -> Vec<QuotaLine> {
                         })
                         .unwrap_or_else(|| "正常".to_string())
                 },
+                reset_date: bucket.reset_date.clone(),
                 fetched_at: fetched_at.clone(),
                 detail: format!(
                     "来源类型：{}\n额度桶 ID：{}\n账号：{}\n已用：{}\n重置日：{}\n绝对到期：{}{}",
@@ -1920,6 +1995,7 @@ fn quota_lines_for_row(row: &QuotaRow) -> Vec<QuotaLine> {
         total: None,
         unit: String::new(),
         status: row.status_summary(),
+        reset_date: None,
         fetched_at,
         detail: format!(
             "来源类型：{}\n{}",
@@ -2201,7 +2277,7 @@ mod tests {
                 .unwrap()
                 .unwrap()),
         });
-        assert!(app.selected_usage_model().is_some());
+        assert!(app.sorted_usage_model().is_some());
     }
 
     #[test]
