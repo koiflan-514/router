@@ -1,20 +1,21 @@
 # 13 实现状态
 
-快照日期：2026-11-05  
+快照日期：2026-11-25  
 版本：0.1.0  
-状态：MVP 代码已落地，Windows 与 WSL Ubuntu 的构建、PTY 测试和真实只读冒烟均已通过；第三方 provider 在 Linux 上的逐家能力仍未验收。
+状态：MVP 代码已落地，视觉重构完成；Windows 与 WSL Ubuntu 的构建、PTY 测试和真实只读冒烟均已通过；第三方 provider 在 Linux 上的逐家能力仍未验收。
 
 ## 1. 总体进度
 
 | 阶段 | 状态 | 说明 |
 |---|---|---|
-| 设计基线 | 完成 | 13 篇设计与状态文档 |
+| 设计基线 | 完成 | 14 篇设计与状态文档 |
 | P0 工程骨架 | 完成 | Crate、CLI、终端恢复、七页 UI、FixtureBackend |
 | P1 真实只读 | 基本完成 | list/account/credits/logs/doctor/health 文本；health JSON 未接入 |
 | P2 安全控制 | 已实现，待真实写操作人工验收 | 命令映射、确认、互斥、dry-run、登录挂起 |
-| P3 诊断与体验 | 部分完成 | 日志过滤/跟随/`n`/`N` 跳转、脱敏、健康文本；签到、完整 ASCII 待做 |
+| P3 诊断与体验 | 基本完成 | 日志过滤/跟随/`n`/`N` 跳转、脱敏、健康文本；签到待接入 |
 | P4 测试与发布 | 基本完成 | Windows/Linux 原生构建与 PTY、真实只读 UI；正式发布包待做 |
 | P5 用量分析与视觉升级 | 完成 | OpenCode 统计、KPI、活动图、模型聚合、分类色与圆角面板 |
+| P6 UI 模块化与响应式重构 | 完成（2026-11-25） | `ui.rs` 拆分模块树、五行外壳、三档断点、语义色/ASCII、44 个新测试 |
 
 ## 2. 已交付能力
 
@@ -22,9 +23,12 @@
 
 - Rust binary `router-tui`，Ratatui 0.30.2、Crossterm 0.29、Tokio。
 - 七页键盘界面：总览、服务、额度、账号、日志、诊断、用量分析。
-- 总览 KPI 卡、每日活动 Sparkline、模型/Provider 聚合表和分类色。
-- 80×24 布局、窄屏降级和过小终端提示。
-- Dark/Light 颜色倾向、NO_COLOR、状态符号 ASCII 替换。
+- 五行外壳（顶栏/页签/主内容/上下文摘要/键位）；三档断点（≥120 / 80–119 / <80）。
+- 总览 KPI 卡、provider 紧凑矩阵、宽屏右栏（健康环/额度 Top/7 天 sparkline/待处理）。
+- 用量 KPI、每日活动 Sparkline、Token 构成横条、工具成功率矩形环、模型行内占比与 `s` 排序。
+- `ui.rs` 渲染根（449 行）+ 模块树：`theme.rs`(522)、`layout.rs`(194)、`widgets.rs`(449)、
+  `common.rs`(715)、`modals.rs`(232)、`pages/*`(约 2190)、`tests.rs`(627)。
+- Dark/Light 颜色倾向、NO_COLOR（BOLD/DIM/REVERSED）、状态符号与边框/进度/sparkline/环 ASCII 降级。
 - 帮助、详情、确认、输入过滤和错误弹窗。
 - 正常退出、Ctrl+C、初始化错误、panic 和登录挂起后的终端恢复路径。
 
@@ -50,7 +54,7 @@
 - 账号页接入后端 `health.level/notes`（如「积分为 0，选中会报额度不足」），error 级排到说明前面。
 - `\\?\D:\...` 前缀不再出现在标题栏与诊断页。
 
-真实只读冒烟结果：
+真实只读冒烟结果（历史记录，当前 provider 数以 `node router.mjs list` 为准）：
 
 ```text
 read-only smoke: 8 providers, 8 account groups, 8 quota rows, logs readable
@@ -93,15 +97,14 @@ read-only smoke: 8 providers, 8 account groups, 8 quota rows, logs readable
 已完成：
 
 - `cargo fmt --check`：通过。
-- `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test --all-targets`：54 个单元测试 + 1 个 demo PTY 测试通过；4 个真实只读测试默认 ignored。
-- `cargo test local_readonly_smoke -- --ignored`：Windows 后端只读契约通过。
-- `cargo test local_usage_smoke -- --ignored`：OpenCode 官方用量接口通过。
-- `tests/pty_smoke.rs`：真实 ConPTY 中启动 demo；ignored 测试覆盖真实后端只读启动和按 `7` 打开真实用量页，读到 provider/模型数据后接收 `q` 并正常退出。
-- `cargo build --release`：Windows 本机构建通过。
-- `cargo check --target x86_64-unknown-linux-gnu --all-targets`：交叉检查通过。
-- WSL Ubuntu：`cargo test --all-targets`、`cargo build --release`、demo PTY 与真实只读 UI PTY 均通过。
-- TestBackend：七页渲染、KPI 卡、Sparkline、80×24、99 列确认弹窗。
+- `cargo clippy --all-targets -- -D warnings`：通过（0 warning）。
+- `cargo test`：**98 unit + 1 demo PTY = 99 passed，0 failed**。
+- unit 侧 4 ignored：2 个真实只读冒烟（`local_readonly_smoke` / `local_usage_smoke`）+ 2 个截图 dump（`dump_screens` / `dump_ascii_screens`）；PTY 侧另有 2 个 live ignored，共 6 个 ignored。
+- `cargo test dump_screens -- --ignored --nocapture`：手工 dump 7 页 × 4 尺寸。
+- `cargo build --release`：通过。
+- TestBackend：七页渲染、KPI 卡、Sparkline、Token 横条、gauge、空数据/后端失败、
+  `--ascii`/`--no-color`，120×40 / 100×30 / 80×24 / 60×20，99 列确认弹窗。
+- 新增 44 个测试，覆盖尺寸矩阵、空数据、后端失败、ASCII 与无色模式。
 
 测试覆盖：
 
@@ -131,10 +134,10 @@ read-only smoke: 8 providers, 8 account groups, 8 quota rows, logs readable
 
 ### 中优先级
 
-6. `--ascii` 只替换状态符号，Ratatui 边框仍为 Unicode。
-7. 日志过滤与 `n`/`N` 命中跳转已实现，但只标出当前落点，不做整行语法高亮。
+6. 未做像素级 golden 快照：CJK 宽度受终端字体影响，当前用可见文本/边界/符号断言 + 手工 dump。
+7. 日志过滤与 `n`/`N` 命中跳转已实现，但只标出当前落点（`»`），不做整行语法高亮。
 8. Windows 与 WSL Linux 的 demo/真实只读 PTY 已自动测试；交互登录挂起后的恢复和真实写操作仍需人工验收。
-9. 额度表格未绘制进度条；数字/单位/状态信息完整。
+9. 环形仪表是 buffer 自绘**矩形环**，不是真圆；换取 ASCII/无色下稳定。
 10. 登录在 Linux 的实际 provider 命令支持未完成真实验收。
 11. 未生成正式发布 zip/tar 和校验文件。
 

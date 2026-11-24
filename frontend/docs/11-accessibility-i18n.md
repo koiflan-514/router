@@ -1,11 +1,11 @@
 # 11 可访问性与国际化
 
-状态：设计基线 ｜ 对应需求：FR-180–189 ｜ 目标：WCAG 2.1 AA
+状态：已实现并完成 axe 复核（2026-11-25）｜ 对应需求：FR-180–189 ｜ 目标：WCAG 2.1 AA
 
 本文定义 `frontend/` 网页面板的无障碍（a11y）、键盘模型、语义与 ARIA、状态多通道表达、动效降级
 与国际化（i18n）策略，是**交互层**的验收依据。视觉 token 由 [06 设计系统](06-design-system.md)
 定义（未生成前以 [00 设计基线](00-design-baseline.md) §10 为准），本文只引用、不重定义。
-术语继承 [`tui/docs/12-glossary.md`](../tui/docs/12-glossary.md)。
+术语继承 [`tui/docs/12-glossary.md`](../../tui/docs/12-glossary.md)。
 
 ## 1. 无障碍目标与验收
 
@@ -33,7 +33,7 @@
 |---|---|
 | Tab 顺序 | 遵循 DOM 顺序：左侧导航 → 顶栏 → 主内容 → 页脚；不用 `tabindex>0` 重排 |
 | 跳转到主内容 | 页面首个可聚焦元素是 Skip link，指向 `<main id="main-content">` |
-| 焦点可见 | 用 `:focus-visible`；焦点环用 `token:selected` 与 2px 外环 |
+| 焦点可见 | Fluent focus rectangle：`:focus-visible` 时 2px `--accent-rest` 描边 + 2px offset；鼠标点击不显示 |
 | 焦点不丢 | 关闭覆盖层/切换路由后，焦点归还触发元素或逻辑后继（§2.4） |
 | 无键盘陷阱 | 除 Dialog/Sheet 刻意包含外，任何区域都可用 Tab/Esc 离开 |
 
@@ -51,18 +51,18 @@
 
 默认修饰键 Ctrl（macOS 显示 ⌘ 并同时接受 ⌘/Ctrl）；`G` 为序列键（按后短暂窗口再按次键）。
 
-| 快捷键 | 作用 | 冲突规避 |
+| 快捷键 | 作用 | 状态 |
 |---|---|---|
-| `Ctrl/⌘ K` | 打开命令面板 | 浏览器基本空闲；覆盖默认搜索 |
-| `Ctrl/⌘ /` | 打开/关闭快捷键帮助 | 避开常用键 |
-| `Esc` | 逐层关闭覆层（面板/Dialog/Sheet/Popover） | — |
-| `G` 然后 `O/P/Q/L/G` | 转到 总览/服务/额度/日志/网关 | 序列键，不用单键字母 |
-| `?` | 状态符号与快捷键图例 | 仅在非输入态 |
-| `R` | 刷新当前页数据 | 不触发写操作 |
-| `P` | 日志"跟随/暂停"切换 | 仅 `/logs`，不停止进程 |
+| `Ctrl/⌘ K` | 打开/关闭命令面板 | 已实现；输入框内也生效 |
+| `Esc` | 逐层关闭覆层（Dialog/Sheet/Popover/命令面板） | 已实现 |
+| `Tab` | 首焦点 Skip link；覆盖层内焦点循环 | 已实现 |
+| `Enter` / `↑` / `↓` | 命令面板执行 / 移动选项 | 已实现 |
+| `R` | 刷新当前页数据（额度/账号） | 已实现；输入框与弹层内不触发 |
+| `G` 序列、`?`、`P`、`/` 等 | 设计目标 | **未实现**，当前以可见按钮为准 |
 
 约束：输入框内**不拦截**字符键（仅在非输入目标生效）；`Ctrl+W/T/N` 等浏览器键一律不占用；
-所有快捷键都有等价的**可点击按钮**，快捷键只是加速而非唯一入口。
+所有快捷键都有等价的**可点击按钮**，快捷键只是加速而非唯一入口。主导航当前项同时有
+`aria-current="page"` 与左侧 3px accent 指示条，不靠颜色单独表意。
 
 ### 2.4 焦点陷阱与焦点归还
 
@@ -275,8 +275,8 @@
 
 | 层 | 工具 | 覆盖 |
 |---|---|---|
-| 静态/组件 | `axe-core`（`jest-axe`/`vitest-axe`） | 地标、名称、对比度、表单关联 |
-| E2E | Playwright + `@axe-core/playwright` | 每页 scan；键盘导航；焦点归还/陷阱 |
+| 静态/组件 | 当前未单独接 `vitest-axe`；组件测试断言可访问名/角色 | 地标、名称、对比度、表单关联由 E2E 兜底 |
+| E2E | Playwright + `@axe-core/playwright` | 15 路由页 + 命令面板 scan；浅色 5 页抽检 |
 | 键盘回归 | Playwright `keyboard` | Skip link、命令面板、Dialog Esc、表格排序 |
 | 对比度 | 主题 token 快照 + 检查工具 | 正文/大字/非文本三档（A1–A2） |
 | 缩放/动效 | Playwright 200% 视口 + reduced-motion 上下文 | 无功能丢失、骨架屏/Spinner/过渡降级 |
@@ -287,11 +287,25 @@
 焦点"取消"、受影响名单、Toast 播报）、日志（实时区不刷屏、暂停可操作）、命令面板（`combobox`/
 `listbox`/`activedescendant` 语义、`Esc` 归还焦点）。
 
+### 9.1 2026-11-25 axe 复核结果
+
+覆盖深色 15 个路由页 + 命令面板、浅色 5 页抽检；`wcag2a/wcag2aa/wcag21a/wcag21aa` 全量扫描，
+**0 violation**（critical/serious/moderate/minor 均为 0）。`e2e/a11y.spec.ts` 的 `KNOWN` 已清空，
+不再有页面级豁免。本轮修复的五类问题：
+
+| 问题 | 位置 | 修复 |
+|---|---|---|
+| `color-contrast`（serious） | 深/浅色 `text-tertiary`、success、info 等 | 重新校核 token，正文与 11px 辅助字、12% 同色状态底均 ≥4.5:1；高对比另有一套 |
+| `definition-list` / `dlitem` | 总览健康度、设置页 | 改为合法的 `dl > div > dt/dd`；`<dl>` 内不再插 `Separator`，分隔线由行边框承担 |
+| `aria-progressbar-name` | 用量缓存效率、网关密钥、报表进度条 | `Progress` 全部提供 `aria-label` 与 `aria-valuetext` |
+| `label-content-name-mismatch` | 总览详情/跳转链接 | 详情按钮用 sr-only「查看详情」；`aria-label` 以可见词开头（`去服务页：…` / `查看日志：…`） |
+| 结构/焦点回归 | 全站 | 导航 `aria-current="page"`、Skip link 首焦点、Dialog/Sheet 焦点归还、`prefers-reduced-motion` 归零 |
+
 ## 10. 未来方向
 
 | 方向 | 说明 | 状态 |
 |---|---|---|
-| 高对比主题 | 额外主题满足 7:1（AAA 正文），支持 `forced-colors` | 后续（待拍板，00 §15） |
+| 高对比主题 | `.high-contrast` + `prefers-contrast: more` 已实现（AA 强化，非 AAA 承诺）；`forced-colors` 仍待验证 | 部分实现 |
 | RTL | 逻辑属性（`margin-inline`/`padding-inline`）替代物理属性，为 `dir="rtl"` 准备 | 后续 |
 | 更多语言 | 在 `src/locales/` 增 `<lang>` 目录 + 回退链扩展（如 `ja`） | 后续 |
 | 无障碍声明 | 发布页提供可访问性说明与反馈渠道 | 后续 |

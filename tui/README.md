@@ -4,7 +4,7 @@
 > **前置**：Rust 1.88+；真实后端还需要 Node.js 与本仓库的 `router.mjs`。  
 > **相关**：[文档索引](../docs/README.md) · [TUI 文档](docs/README.md) · [根 README](../README.md)
 
-> 状态：**MVP 已实现，Windows/Linux 均已运行验证**  
+> 状态：**MVP 已实现 · 视觉重构完成（2026-11-25）**  
 > 版本：0.1.0  
 > 目标平台：Windows、Linux 终端  
 > 边界：TUI 的终端界面跨平台；具体 provider 能力仍取决于本机 Node router 与第三方反代
@@ -13,16 +13,17 @@
 
 ## 已实现
 
-- **总览**：全部 provider（十三家反代 + 统一网关叠加层）的开关、进程、认证、客户端、端口、模型数和额度摘要。
+- **总览**：全部 provider（十三家反代 + 统一网关叠加层）的开关、进程、认证、客户端、端口、模型数和额度摘要；宽屏带健康环、额度 Top、近 7 天 sparkline 与待处理。
+- **视觉**：五行外壳（顶栏/页签/主内容/上下文摘要/键位），三档响应式（≥120 / 80–119 / <80）；语义色 `Tone`、图标 `Glyphs`、`--ascii` 全 7-bit、`--no-color` 退化为 BOLD/DIM/REVERSED，CJK 按显示宽度对齐。
 - **服务**：启动、停止、停止但保留客户端、重启、仅启用、关闭、全部启用/关闭和同步。
-- **用量分析**：OpenCode 真实会话/步骤 KPI、Token 构成、每日活动、工具成功率和模型/Provider 聚合，支持 24h/7d/30d/全部历史。
-- **额度**：按 provider/账号展示余额、总量、单位、重置日、可领取状态和数据时间；不跨厂商汇总。
+- **用量分析**：OpenCode 真实会话/步骤 KPI、Token 构成横条、每日活动 sparkline、工具成功率 gauge、模型/Provider 聚合与行内 steps 占比；支持 24h/7d/30d/全部历史与 `s` 循环排序。
+- **额度**：按 provider/账号展示余额、总量、单位、`█░` 进度条、重置日、可领取状态和数据时间；无总量显示 `────`，不编造 0，不跨厂商汇总。
 - **账号**：账号池、当前生效、轮询状态、dry-run、切换、恢复整池、添加账号和登录。
 - **日志**：选择 provider、过滤、暂停/跟随、调整尾部行数、清屏和操作输出。
 - **诊断**：环境、`doctor`、无试打健康检查和经确认的真实试打。
 - **安全**：写操作确认、默认取消、写任务互斥、只读模式、命令参数白名单、日志控制序列清理和凭据脱敏。
 - **演示**：`--demo` 使用匿名内存数据，不需要 Node、凭证、网络或本机服务。
-- **测试**：55 个默认测试（54 个单元测试 + 1 个 demo PTY）通过，4 个真实只读测试 default-ignored；包含真实 PTY 启动/退出、真实后端只读 UI 和真实用量页测试。Windows 与 WSL Ubuntu 均完成构建和测试；Linux 原生 PTY、真实只读 UI 和 release 构建已通过；双平台 CI 已配置。
+- **测试**：`cargo test` → **98 unit + 1 demo PTY = 99 passed，0 failed**；unit 侧 4 ignored（2 个真实只读 + 2 个截图 dump），PTY 侧另有 2 个 live ignored。`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo build --release` 均通过。新增 44 个渲染/交互测试，覆盖 120×40、100×30、80×24、60×20 × 7 页面、空数据、后端失败、`--ascii`/`--no-color`。
 
 ## 运行
 
@@ -73,7 +74,7 @@ root 也可以从当前目录、父目录或 `ROUTER_ROOT` 自动发现。
 |---|---|
 | 总览 | `Enter` 详情，`h/l` 切换 provider，`2/5` 跳转 |
 | 服务 | `u` 启动，`d` 停止，`K` 停止并保留客户端，`R` 重启，`o` 仅启用此家，`x` 关闭，`s` 同步，`A` 全部启用，`N` 全部关闭，`L` 日志 |
-| 用量 | `7` 打开，`t` 切换 24h/7d/30d/全部，`Enter` 模型 Token 与成本详情 |
+| 用量 | `7` 打开，`t` 切换 24h/7d/30d/全部，`s` 循环排序（步骤/Token/成本/名称，纯前端不重查），`Enter` 模型 Token 与成本详情 |
 | 额度 | `Enter` 详情，`4` 跳到账号页；`c` 仅说明签到能力 |
 | 账号 | `v` 预览，`c` 正式切换，`a` 恢复整池，`A` 添加账号，`L` 登录，`3` 额度 |
 | 日志 | `p` 暂停/跟随，`f` 过滤，`n`/`N` 跳到下/上一个命中，`+/-` 调整行数，`c` 清屏，`End` 底部，`Home` 顶部 |
@@ -97,6 +98,7 @@ cd tui
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
+cargo test dump_screens -- --ignored --nocapture   # 手工 dump 7 页 × 4 尺寸
 cargo build --release
 ```
 
@@ -130,7 +132,8 @@ cargo build
 - 额度采集器把 Trae 的 provider 写成 `trae`，而 provider 表用 `trae-local`；TUI 在解析时统一成 `trae-local`，所以额度列、`4` 跳转和详情都能对上。
 - 签到尚无统一的 Node 命令；界面会显示可领取状态，但不会执行真实领取。已停用账号即使未签到也不计入顶部「可领取」，避免给出领了也不会被调度的数字。
 - 健康检查目前展示既有 `health.mjs` 的清理后文本，结构化健康 JSON 尚未接入。
-- `--ascii` 当前主要替换状态符号；边框仍由 Ratatui 绘制。
+- `--ascii` 已覆盖边框、选中符、进度条 `#+.`、sparkline 与矩形环；`--no-color` 退化为 BOLD/DIM/REVERSED，并保留图标区分。
+- 未做像素级 golden 快照（CJK 宽度受终端差异影响）；用 `cargo test dump_screens -- --ignored --nocapture` 手工 dump。环形仪表是 buffer 自绘矩形环，不是真圆。
 - Windows 与 WSL Ubuntu 已通过真实 PTY 和真实只读 UI；Linux 第三方 provider 的实际启停/登录能力未在本机逐家验收。
 - 真实写操作与交互登录挂起后的恢复仍需人工验收。
 - 日志过滤与 `n`/`N` 命中跳转已实现（只标出当前落点，不做整行高亮）。
@@ -199,7 +202,15 @@ tui/
 │   ├── backend/         Node 后端与匿名 Fixture 后端
 │   ├── redact.rs        ANSI/控制字符清理与凭据脱敏
 │   ├── terminal.rs      初始化、挂起、恢复与 panic hook
-│   └── ui.rs            六页、弹窗、主题与 TestBackend 测试
+│   ├── ui.rs            渲染根（五行外壳 + 页面分发 + 弹窗）
+│   └── ui/
+│       ├── theme.rs      语义色 Tone / 图标 Glyphs / ASCII / CJK 宽度
+│       ├── layout.rs     三档断点与五行骨架
+│       ├── widgets.rs    KPI 卡、meter、分段条、sparkline、矩形环
+│       ├── common.rs     纯函数派生（统计/额度/错误摘要/日志级别）
+│       ├── modals.rs     确认/详情/帮助/过滤弹窗
+│       ├── pages/        七个页面（overview/providers/credits/accounts/logs/diagnostics/usage）
+│       └── tests.rs      尺寸 × 页面 × 空/失败/ascii/no-color 渲染测试
 └── .github 根工作流（位于仓库级 .github/workflows/tui.yml）
 ```
 

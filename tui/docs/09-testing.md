@@ -1,6 +1,6 @@
 # 09 测试策略
 
-状态：设计基线  
+状态：已实现并实测（2026-11-25）  
 原则：无凭证可测、写操作可验证但不触碰真实环境、两个平台同标准
 
 ## 1. 测试目标
@@ -36,7 +36,7 @@ Windows/Linux 终端与真实后端人工验收
 
 至少提供以下匿名场景：
 
-- `healthy`：八家状态完整，含单账号、多账号和不同额度类型。
+- `healthy`：十三家状态完整，含单账号、多账号和不同额度类型，网关作为叠加层。
 - `mixed`：开关/进程/opencode 漂移，凭证将到期，部分额度可领取。
 - `partial_failure`：单家端点、额度和账号查询独立失败。
 - `empty`：无账号、无额度桶、无日志、无模型。
@@ -151,22 +151,23 @@ Windows/Linux 终端与真实后端人工验收
 
 | 页面 | 必测状态 |
 |---|---|
-| 总览 | 正常、混合漂移、局部失败、首次加载、stale |
+| 总览 | 正常、混合漂移、局部失败、首次加载、stale；宽屏右栏与窄屏关键列 |
 | 服务 | 操作中、只读、普通确认、高风险确认、刷新未确认 |
-| 额度 | 多单位、多账号、空桶、可领取、活动关闭、过期提醒 |
+| 额度 | 多单位、多账号、空桶、可领取、活动关闭、过期提醒、`reset_date`、无总量 `────` |
 | 账号 | 单账号、多账号、空账号、dry-run、平台不支持 |
-| 日志 | 空日志、过滤、暂停、跟随、截断、脱敏 |
-| 诊断 | 环境错误、健康部分失败、真实试打确认 |
+| 日志 | 空日志、过滤、暂停、跟随、截断、脱敏、级别着色 |
+| 诊断 | 环境错误、健康部分失败、真实试打确认、checklist + 通过率 meter |
+| 用量 | KPI/Sparkline/Token 横条/gauge/模型表；空活动、stale；`s` 四档排序 |
 | 帮助 | 当前页面和当前模式说明 |
 
 每个关键页面至少测试：
 
-- 120×30、80×24、60×20；
+- 120×40、100×30、80×24、60×20（当前测试矩阵 `SIZES`）；
 - dark/light 的语义不丢字；
-- NO_COLOR；
-- Unicode 与 ASCII；
+- NO_COLOR（BOLD/DIM/REVERSED，不产生调色板色）；
+- Unicode 与 ASCII（边框/选中/进度/sparkline/环全部 7-bit）；
 - 中文长名称和截断；
-- 小于最小尺寸；
+- 小于最小尺寸（<40×12）；
 - 弹窗默认焦点为取消。
 
 不断言无意义的完整样式字节；重点断言可见文本、布局边界、状态和关键符号。稳定页面可以使用匿名快照，但快照更新必须人工审查。
@@ -228,7 +229,7 @@ pseudo-terminal 测试至少验证：
 
 ### 核心场景
 
-1. 八家 list/account/credits/log 只读显示。
+1. 十三家 list/account/credits/log 只读显示。
 2. 单 provider up/down/restart 和 `--keep-oc`。
 3. `off` 后再恢复；`on` 验证排他确认。
 4. opencode 用户自管配置不会被 TUI 绕过。
@@ -243,8 +244,8 @@ pseudo-terminal 测试至少验证：
 
 - 解析官方 SessionStats：providerID、活动、模型、Token、缓存和工具统计。
 - 验证 24h/7d/30d/全部的 from/to 毫秒区间。
-- 模型按 steps 排序，选中项保持可见。
-- KPI 卡、Sparkline 和模型表在 80×24 与大尺寸下渲染。
+- 模型按 steps 排序，选中项保持可见；`s` 循环排序不触发新请求。
+- KPI 卡、Sparkline、Token 构成横条、工具成功环和模型表在 120×40 / 80×24 下渲染。
 - 无 OpenCode、空活动、空模型、字段错误和旧数据 stale 均有明确状态。
 - `local_usage_smoke` 使用真实官方 CLI，不读取数据库或修改会话。
 - PTY 中按 `7` 打开用量页，等待真实 Model/Steps/provider 出现后退出。
@@ -258,8 +259,24 @@ Windows/Linux 均执行等价命令：
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
+cargo test dump_screens -- --ignored --nocapture   # 手工 dump 7 页 × 4 尺寸
 cargo build --release
 ```
+
+### 12.1 本机实测结果（2026-11-25）
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 单元 + PTY | `cargo test` | ✅ 98 unit + 1 demo PTY = **99 passed**，0 failed；unit 4 ignored，PTY 另 2 live ignored |
+| 格式 | `cargo fmt --check` | ✅ 通过 |
+| Clippy | `cargo clippy --all-targets -- -D warnings` | ✅ 0 warning |
+| 发布构建 | `cargo build --release` | ✅ 通过 |
+| 渲染矩阵 | TestBackend | ✅ 120×40、100×30、80×24、60×20 × 7 页面；空数据/后端失败/ascii/no-color |
+| 截图 | `cargo test dump_screens -- --ignored --nocapture` | 手工 dump，不做像素 golden |
+
+新增 44 个测试；unit 侧 4 个 ignored 为 2 个真实只读冒烟 + 2 个截图 dump，PTY 侧另有 2 个
+live ignored（共 6 个 ignored）。CJK 宽度受终端字体影响，因此不引入像素级 golden 快照，
+改为断言可见文本、边界与状态符号。
 
 另做：
 

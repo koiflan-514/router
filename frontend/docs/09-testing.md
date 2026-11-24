@@ -1,6 +1,6 @@
 # 09 测试策略
 
-状态：设计基线
+状态：已实现并实测（2026-11-25）
 对应需求：NFR-108/109
 
 > NFR-108：无真实凭证也能跑通 CI（确定性、匿名、可重复）。NFR-109：桥接契约可解析、
@@ -67,9 +67,10 @@
 | `accounts` | 单账号、多账号、空账号、dry-run 预览、平台不支持 |
 | `logs` | 空日志、过滤、暂停、跟随、截断、脱敏后显示 |
 | `diagnostics` | 环境错误、健康部分失败、真实试打加强确认（默认折叠） |
-| `usage` | KPI 卡、图表、模型表在窄/宽布局；空活动、旧数据 stale |
-| `gateway/*` | 调度快照、用量、降级链、密钥（只显示 SHA-256 摘要）、免费供应商只读、本地应答 |
-| `settings` | 主题、刷新间隔、只读、桥接连接、演示模式切换 |
+| `usage` | 六 KPI、双模式活动图、Token 构成、工具可靠性、缓存效率、模型表排序、CSV 导出；空活动、旧数据 stale |
+| `reports` | 五源状态、结论按数据生成、范围映射、CSV/JSON 导出、打印样式；空/失败/stale |
+| `gateway/*` | 调度 lane、用量双轴/Token 图、降级链阶梯、密钥（只显示 SHA-256 摘要）、免费供应商只读、本地应答 |
+| `settings` | 主题、对比度、刷新间隔、只读、桥接连接、演示模式切换 |
 
 组件层通用断言：
 
@@ -104,17 +105,23 @@
 
 | 场景 | 断言 |
 |---|---|
-| 全页面冒烟 | 依次进入 9 个页签与 `gateway/*` 嵌套路由，页面无未捕获错误、无控制台 error |
-| 键盘导航 | Tab/Shift+Tab、`Esc` 关闭弹层、快捷键切页、焦点回到触发处 |
-| 命令面板 | `Ctrl/Cmd+K` 打开、输入过滤、回车执行只读动作 |
+| 全页面冒烟 | 15 个路由页（含 6 个 `gateway/*` 子页）依次可达，页面无未捕获错误、无控制台 error |
+| 键盘与焦点 | Skip link 首焦点、主导航 `aria-current`、`Esc` 关闭弹层、焦点回到触发处、额度页 `r` 只触发一次 |
+| 命令面板 | `Ctrl/⌘+K` 打开/关闭、输入过滤、`↑↓` 选择、回车跳转报表页 |
 | 确认流程 | 普通/高风险确认、默认焦点在取消、受影响的 `on/all/none` 名单可见 |
 | 日志跟随 | 连接 SSE、追加行、暂停/恢复跟随、`End` 复位、断开重连 |
-| 响应式断点 | 宽/中/窄三档：侧栏折叠、表格横向或卡片化、图表不溢出 |
+| 响应式断点 | 375 / 768 / 1440 三档 × 8 个关键页，`scrollWidth - clientWidth <= 1`；侧栏折叠与图表不溢出 |
 | URL 即状态 | 选中 provider、时间范围、过滤、排序进 search params；刷新后恢复；后退有效 |
+| 报表 | 五源状态、范围映射、CSV 下载内容、窄屏不溢出、打印入口存在 |
+
+**实测（2026-11-25，demo 桥接）**：11 个 spec 共 **96 passed / 0 failed / 0 skipped**，2.7 分钟；
+`workers=1`、headless、`PANEL_E2E_PORT=8892`。
 
 ### 2.6 可访问性
 
-- **自动化**：`@axe-core/playwright` 对每个页面与关键弹层运行，规则集 `wcag2a/wcag2aa`，零 critical/serious。
+- **自动化**：`@axe-core/playwright` 对 15 个路由页 + 命令面板运行，规则集
+  `wcag2a/wcag2aa/wcag21a/wcag21aa`；深色 16 个目标与浅色 5 页抽检均为 **0 violation**
+  （critical/serious/moderate/minor 全 0）。`KNOWN` 豁免清单已清空，新增 serious/critical 一律失败。
 - **人工矩阵**：纯键盘走查（无需鼠标完成一次启停预览）、NVDA（Windows）与 VoiceOver（macOS）读屏抽检、`prefers-reduced-motion` 下无强制动效、对比度符合 WCAG 2.1 AA（00 §10）。细节与 `11-accessibility-i18n.md` 一致。
 
 ## 3. 测试数据
@@ -195,8 +202,9 @@ FR/NFR 段按 [00 §14](00-design-baseline.md#14-文档约定) 编号。本表�
 | FR-120–129 | 额度 | 单元 + 契约 + 组件 | 多单位不混合、`total=null` 不算百分比、`fetchedAt` 过期、可领取/活动关闭 |
 | FR-130–139 | 账号与登录 | 契约 + 组件 | dry-run 预览、正式切换、恢复整池、平台不支持、交互式动作挂起与取消 |
 | FR-140–149 | 日志与诊断 | 单元 + 组件 + E2E | 脱敏/控制序列清理、跟随/暂停/截断、健康部分失败、真实试打加强确认 |
-| FR-160–169 | 用量分析 | 单元 + 组件 | 24h/7d/30d/all 换算、steps 排序、空活动 stale、图表响应式 |
-| FR-170–179 | 网关 | 契约 + 组件 + E2E | 调度快照、用量、降级链、密钥仅 SHA-256 摘要、免费供应商只读、本地应答 |
+| FR-160–169 | 用量分析 | 单元 + 组件 + E2E | 24h/7d/30d/all 换算、steps 排序、空活动 stale、图表响应式、CSV 导出 |
+| FR-160–169 | 报表汇总 | 单元 + 组件 + E2E | 五源状态、范围→网关天数映射（24h/7d/30d/all→1/7/30/90）、CSV/JSON、不跨口径相加 |
+| FR-170–179 | 网关 | 契约 + 组件 + E2E | 调度 lane、用量双轴/Token 图、降级链阶梯、密钥仅 SHA-256 摘要、免费供应商只读、本地应答 |
 | FR-180–189 | 设置/主题/a11y/i18n | 组件 + a11y | 主题切换持久化、刷新间隔、axe 零 critical、zh/en 文案 |
 | FR-190–199 | 通用交互 | 组件 + E2E | 加载/空/错/慢/只读、命令面板、键盘导航、demo 与只读拦截 |
 | NFR-101–110 | 非功能 | 单元 + CI | 无凭证 CI、契约升版与未知字段、有界输出、双平台、安全扫描 |
@@ -233,17 +241,32 @@ Node 版本矩阵：`20.x`（LTS）与 `22.x`（LTS）；本机另有 `v26` 仅�
 ```bash
 npm ci
 npm run typecheck      # tsc --noEmit
-npm run lint           # eslint
 npm test               # vitest run（单元 + 契约 + 组件 + MSW）
-npm run build          # vite build
-npx playwright test    # 对 --demo 桥接
+npm run build          # tsc --noEmit && vite build
+PANEL_E2E_PORT=8892 npx playwright test --workers=1   # 对 --demo 桥接，headless
 ```
+
+> `package.json` 当前没有 `lint` 脚本；ESLint 不在本仓库的验证链路内，门禁是 typecheck + test + build + Playwright。
+
+### 7.1 本机实测结果（2026-11-25）
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npm run typecheck` | ✅ 0 error |
+| 单元/契约/组件 | `npm test` | ✅ 23 passed + 1 skipped 文件；247 passed + 3 skipped 用例；0 failed |
+| 生产构建 | `npm run build` | ✅ 通过 |
+| E2E（demo） | `PANEL_E2E_PORT=8892 npx playwright test --workers=1` | ✅ 96 passed / 0 failed / 0 skipped，约 2.7 分钟 |
+| axe 深色 | Playwright + axe | ✅ 15 路由页 + 命令面板 0 violation |
+| axe 浅色 | Playwright + axe | ✅ 5 页抽检 0 violation |
+| 响应式 | Playwright 375/768/1440 × 8 页 | ✅ 横向溢出全部为 0（阈值 ≤1） |
+
+截图存档：`frontend/test-results/screenshots/`（24 张，`test-results/` 已 gitignore）。
 
 补充检查：
 
 | 检查 | 说明 |
 |---|---|
-| a11y | Playwright + axe，页面与关键弹层零 critical/serious |
+| a11y | Playwright + axe，页面与关键弹层零 critical/serious；`KNOWN` 为空 |
 | fixture 扫描 | fixtures 与文档匹配不到真实路径/秘密模式 |
 | 匿名文档链接 | 相对链接有效，无死链 |
 | 锁文件一致 | `package-lock.json` 与 `package.json` 一致 |
@@ -282,14 +305,14 @@ npx playwright test    # 对 --demo 桥接
 
 | # | 检查项 | 通过标准 |
 |---|---|---|
-| R1 | `npm run typecheck && npm run lint` | 无错误、无 warning 升级 |
+| R1 | `npm run typecheck` | 0 错误（本仓库未配置 lint 脚本） |
 | R2 | `npm test` | 单元/契约/组件/MSW 全绿；新增或更新的 fixture 已审查 |
 | R3 | 契约升版 | 新字段 additive 或已升 `schemaVersion` 并同步 schema/fixtures/用例 |
 | R4 | 组件五态 | 每 feature 覆盖加载/空/错误/stale/只读 |
 | R5 | 确认与只读 | 默认焦点取消、危险名单可见、桥接层拦截 403 可断言 |
 | R6 | 脱敏与清理 | 新增日志/输出路径有脱敏与控制序列清理用例 |
 | R7 | 文本解析禁令 | 无正则把人类文本转为结构化字段 |
-| R8 | `npx playwright test` + axe | E2E 全绿、a11y 零 critical/serious |
+| R8 | `PANEL_E2E_PORT=<free> npx playwright test --workers=1` + axe | E2E 全绿、a11y 零 critical/serious，375/768/1440 无横向溢出 |
 | R9 | fixture 安全 | 匿名扫描通过，无真实 token/UID/邮箱/路径 |
 | R10 | 需求追踪 | FR/NFR 段有对应测试映射，改需求必改测试 |
 

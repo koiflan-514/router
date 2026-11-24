@@ -1,8 +1,8 @@
 # 14 用量分析与视觉设计
 
-状态：已实现  
+状态：已实现（视觉重构 2026-11-25）  
 数据来源：OpenCode V2 官方会话统计 API  
-更新日期：2026-11-05
+更新日期：2026-11-25
 
 ## 1. 目标
 
@@ -137,13 +137,15 @@ OpenCode CLI 负责服务发现与认证上下文，TUI 不猜测服务端口或
 
 ### 4.1 “7 用量”页
 
-标准高度下由三部分组成：
+标准高度下由四部分组成：
 
-1. **KPI 卡**：会话/提示、会话步骤、Token 构成、工具成功率。
-2. **每日活动 Sparkline**：按 OpenCode `activity` 绘制，带时间范围和上报成本。
-3. **模型/Provider 表**：模型、Provider、Steps、输入、输出、推理、缓存读取、成本。
+1. **KPI 卡**：会话/步骤、Token、成本、活跃/连续、工具成功率；窄屏截断到 3–4 张。
+2. **每日活动 Sparkline**：按 OpenCode `activity` 绘制，带时间范围、峰值与上报成本。
+3. **Token 构成横条 + 工具成功率矩形环**：输入/输出/推理分段，缓存读写另计；成功率带图例。
+4. **模型/Provider 表**：模型、Provider、Steps、输入、输出、推理、缓存读取、成本、行内 steps 占比。
 
-模型表按 Steps 降序，并随选中项滚动。窄屏减少输入和推理列，详情中仍保留完整数据。
+模型表默认按 Steps 降序，并随选中项滚动；`s` 在步骤/Token/成本/名称间循环排序（纯前端，不重新请求）。
+窄屏减少输入和推理列，详情中仍保留完整数据；高度不足时先压缩说明与 Token 区，KPI 与表格保留。
 
 ### 4.2 总览 KPI
 
@@ -157,18 +159,21 @@ OpenCode CLI 负责服务发现与认证上下文，TUI 不猜测服务端口或
 | `↑↓` / `jk` | 选择模型 |
 | `Enter` | 查看模型完整 Token 与成本详情 |
 | `t` | 切换近 24 小时、近 7 天、近 30 天、全部历史 |
+| `s` | 循环排序：步骤 → Token → 成本 → 名称（纯前端，不重新请求） |
 | `r` | 刷新当前范围和 OpenCode 状态 |
 | `O` | 查看最近操作输出 |
 | `?` | 查看帮助 |
 
 ## 5. 视觉规范
 
-- 参考 OpenCode 的语义色与分类色，不硬编码某一主题的全部界面颜色。
-- Provider 使用稳定的分类色：CodeArts 紫、Qoder 国内青、Qoder 国际蓝、Trae 绿、WorkBuddy 黄、WorkBuddy 国际浅紫。
-- KPI 卡、Sparkline 和表格使用圆角边框。
-- 表头使用低亮度底色，选中行使用高对比前景与背景。
+- 颜色只来自 `Tone` 语义层（Accent/Success/Warning/Error/Info/Muted/Normal），页面不直接写 `Color`。
+- Provider 使用稳定分类色：CodeArts 紫、Qoder 国内青、Qoder 国际蓝、Trae 绿、WorkBuddy 黄、
+  WorkBuddy 国际浅紫、ZCode 橙、Loomy 洋红、小浣熊红、Gateway 中性。
+- KPI 卡、Sparkline、Token 横条、矩形环和表格使用统一圆角/边框；行内 steps 占比条使用 `█░`。
+- 表头使用低亮度底色，选中行使用高对比前景与背景（无色模式用 REVERSED）。
 - 状态不仅靠颜色：数值、文字、单位和图例始终存在。
-- `NO_COLOR` 与 `--ascii` 下保持可读；无数据时使用文字而不是空白图表。
+- `NO_COLOR` 与 `--ascii` 下保持可读：无色退化为 BOLD/DIM/REVERSED，ASCII 覆盖边框、选中、
+  进度、sparkline 与环；无数据时使用文字而不是空白图表。
 
 ## 6. 错误与数据边界
 
@@ -186,8 +191,9 @@ OpenCode CLI 负责服务发现与认证上下文，TUI 不猜测服务端口或
 
 - OpenCode 响应解析和 providerID 映射。
 - 时间范围、Token 求和、工具成功率。
-- 模型 Steps 排序和选择。
-- KPI、Sparkline、模型表及总览卡片渲染。
+- 模型 Steps 排序和选择；`s` 四档排序只改渲染顺序、不触发请求。
+- KPI、Sparkline、Token 横条、工具成功环、模型表及总览卡片渲染；120×40 / 80×24 / 60×20。
+- 空数据、后端失败、`--ascii`、`--no-color` 均有渲染用例。
 - Windows 原生 OpenCode CLI 的真实只读调用。
 - Windows PTY：启动后按 `7`，等待 `Model/Steps/codearts` 出现后退出；Linux demo 与普通只读 PTY 另行验证。
 

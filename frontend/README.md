@@ -21,10 +21,11 @@
 
 ## 设计目标
 
-- **看得清**：九家 provider 的开关、进程、客户端配置、认证四个状态分别可见，配置漂移一眼可见。
+- **看得清**：九家 provider 的开关、进程、客户端配置、认证四个状态分别可见，配置漂移一眼可见；视觉基线为 Fluent 2（Mica/Acrylic、语义状态色、elevation 与 150/250ms 动效）。
 - **控得准**：启停、重启、仅启用、关闭、同步、账号切换都有确认；写操作全局串行、操作后重新查询。
 - **出错能定位**：从总览异常一键进入对应 provider 的日志或诊断，三秒内看到原因。
 - **不虚构数据**：只展示 CLI、本地网关或 OpenCode 官方统计能真实取得的数据。
+- **只读也能复盘**：总览/用量/额度/网关/报表都提供可分享的 URL 状态与只读图表，报表可导出 CSV/JSON 或打印。
 
 ## 技术栈
 
@@ -34,8 +35,8 @@
 | 构建 | Vite |
 | 路由 | TanStack Router（search 参数即状态） |
 | 数据 | TanStack Query v5 |
-| UI | Tailwind CSS + shadcn/ui + Radix |
-| 图表 / 表格 | Recharts（shadcn chart）、TanStack Table |
+| UI | Tailwind CSS + shadcn/ui + Radix；视觉层为 Fluent 2 语义 token（保留 shadcn 变量名映射） |
+| 图表 / 表格 | Recharts + 自绘 Sparkline/RingGauge、TanStack Table |
 | 校验 | Zod（契约运行时校验） |
 | 测试 | Vitest、React Testing Library、MSW、Playwright |
 | 桥接 | Node.js（`frontend/server/`），仅监听 `127.0.0.1:8792` |
@@ -63,11 +64,14 @@ npm run start -- --demo
 
 ```bash
 npm run typecheck                # tsc --noEmit
-npm test                         # vitest：单元 + 契约 + 桥接集成
+npm test                         # vitest：23 passed + 1 skipped 文件；247 passed + 3 skipped 用例
 npm run build                    # 生产构建（桥接随后托管 dist）
-npx playwright test              # E2E（demo，无需凭证）
+PANEL_E2E_PORT=8892 npx playwright test --workers=1   # E2E（demo，headless，96 passed）
 PANEL_REAL_SMOKE=1 npx vitest run tests/bridge-real.test.ts   # 可选：真实只读冒烟
 ```
+
+体积与兼容：Playwright 对 `--demo` 桥接跑真实生产代码路径，不 spawn 进程、不读真实文件；
+axe 深色 15 路由页 + 命令面板、浅色 5 页抽检均为 0 violation；375/768/1440 × 8 关键页无横向溢出。
 
 ## 页面
 
@@ -80,6 +84,7 @@ PANEL_REAL_SMOKE=1 npx vitest run tests/bridge-real.test.ts   # 可选：真实�
 | 日志 | `/logs` | 某家为什么报错？ |
 | 诊断 | `/diagnostics` | doctor / 健康 / 试打结果？ |
 | 用量 | `/usage` | OpenCode 会话 / Token / 工具 / 模型聚合？ |
+| 报表 | `/reports` | 跨用量/额度/Provider/网关的只读汇总，CSV/JSON 导出与打印 |
 | 网关 | `/gateway/*` | 调度、用量、降级链、密钥、免费供应商、本地应答 |
 | 设置 | `/settings` | 主题、刷新间隔、只读、桥接连接、演示模式 |
 

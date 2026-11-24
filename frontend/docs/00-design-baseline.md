@@ -1,6 +1,6 @@
 # 00 设计基线
 
-状态：设计基线（文档阶段，尚未实现）
+状态：设计基线 · 已实现（2026-11-25，见 [13 实现状态](13-implementation-status.md)）
 适用范围：`frontend/` 网页面板的全部文档与后续实现
 定位：本文件是**唯一事实来源**。其余文档（01–14）都引用本文件固定的编号、路由、契约与
 token，不得各自另立一套。
@@ -19,13 +19,14 @@ token，不得各自另立一套。
 
 | 决策 | 结论 | 理由 |
 |---|---|---|
-| 本轮交付 | **只写文档**，不写实现代码 | 用户明确指定；先固定设计再动手 |
+| 交付方式 | **设计先行，已按基线落地实现** | 先固定契约与页面语义，再实现并用测试回填差异 |
 | 前端框架 | **React 19（最新稳定）** | 用户指定；Actions/`use()`/表单 Actions 直接服务写操作模型 |
 | 构建 | **Vite + TypeScript** | 事实标准、启动快、`import.meta.env` 支持 |
 | 路由 | **TanStack Router** | 类型安全、search 参数即状态（可分享 URL，对齐 Vercel 日志页） |
 | 数据层 | **TanStack Query v5** | 服务端状态缓存/去重/stale/后台刷新，天然映射 TUI 的 `Resource<T>` |
 | UI 组件 | **Tailwind CSS + shadcn/ui（base 风格）+ Radix 原语** | 复制进仓库、可控、无需自造轮子；组件清单见官网 |
-| 图表 | **Recharts（经 shadcn chart 封装）** | 与 shadcn 主题 token 打通 |
+| 视觉体系 | **Fluent 2 语义 token 为底，保留 shadcn 变量名作兼容映射** | surface/accent/stroke/status/elevation/motion 统一；旧类名不用迁移，细节见 [06](06-design-system.md) |
+| 图表 | **Recharts + 自绘 Sparkline/RingGauge** | Recharts 负责面积/柱/环形；迷你趋势与比例环用纯 SVG，避免重依赖 |
 | 表格 | **TanStack Table（经 shadcn Data Table）** | 排序/筛选/虚拟滚动可控 |
 | 数据接入 | **新增 Node 桥接服务**（`frontend/server/`） | 网关无 CORS、且不能启停进程；浏览器无法直接驱动 CLI |
 | 桥接职责 | 包装 CLI（参数数组 spawn）+ 代理网关 HTTP + SSE 推流 + 只监听回环 | 与 TUI 的 `NodeBackend` 同构，见 `tui/docs/04-architecture.md` |
@@ -130,12 +131,14 @@ x-router-local-answer`。回环默认免密钥；带无效密钥也不拦（`str
 | 日志 | `logs` | `/logs` | 某家为什么报错？ |
 | 诊断 | `diagnostics` | `/diagnostics` | doctor/健康/试打结果？ |
 | 用量 | `usage` | `/usage` | OpenCode 会话/Token/工具/模型聚合？ |
+| 报表 | `reports` | `/reports` | 跨数据源的只读汇总、导出与打印？ |
 | 网关 | `gateway` | `/gateway/*` | 调度、用量、降级链、密钥、免费供应商、本地应答 |
-| 设置 | `settings` | `/settings` | 主题、刷新间隔、只读、桥接连接、演示模式 |
+| 设置 | `settings` | `/settings` | 主题/对比度、刷新间隔、只读、桥接连接、演示模式 |
 
 `gateway` 用嵌套路由：
 `/gateway`（调度快照）·`/gateway/usage`·`/gateway/combos`·`/gateway/keys`·
-`/gateway/free`·`/gateway/local-answers`。
+`/gateway/free`·`/gateway/local-answers`。全站共 **15 个路由页**（含 6 个网关子页）；导航按
+`概览 / 数据 / 系统` 三组排列。
 
 URL 即状态：选中 provider、时间范围、日志过滤、表格排序都进 search params（可分享、可回退）。
 顶栏常驻：工作范围（local/demo）、桥接与网关可达性、各数据源最后成功时间、活动任务数。
@@ -235,23 +238,31 @@ type Task = {                          // 对应 TUI 的 Action 内部模型
   完成后**重新查询**，只在确认后才更新 UI。
 - 危险等级：`normal`（up/down/keep-oc/restart/off/sync）、`high`（on/all/none、恢复整池）。
   高风险必须列出受影响名单，默认焦点"取消"。
-- 互斥：写任务**全局串行**（八家规模小，简单优先）；同目标重复提交去重。
+- 互斥：写任务**全局串行**（九家白名单规模小，简单优先）；同目标重复提交去重。
 - `read-only` 模式在**桥接层**阻断写，不只是隐藏按钮。
 - 交互式动作（`login`/`account add`）浏览器无法接管 stdin：桥接只**发起并等待**，
   把终端留给用户在原生终端完成，UI 显示"等待外部登录完成"并可取消（见 05/07 文档）。
 
 ## 10. 视觉与 token
 
+- 视觉基线：**Fluent 2 语义 token**（`--accent-*`、`--surface-1/2/3`、`--stroke-1/2`、
+  `--text-primary/secondary/tertiary`、`--status-*`、elevation/radius/motion）。旧 shadcn 变量名
+  全部映射到 Fluent 值，既有 `bg-card`/`text-muted-foreground` 类继续可用；取值见 [06 §2](06-design-system.md#2-token-规范)。
 - 语义色：`accent / success / warning / error / muted / selected / border / background / foreground`
-  （对齐 `tui/docs/03-ui-design.md` §13），以 Tailwind CSS 变量 + shadcn 约定实现，支持
-  dark/light/system（shadcn Vite ThemeProvider 模式）。
+  （对齐 `tui/docs/03-ui-design.md` §13），支持 dark/light/system 与高对比。
+- 材质与层次：`.mica` 应用底、`.acrylic` 弹层/抽屉（半透明 + 30px 模糊 + 1px stroke，
+  `@supports` 回退不透明）、`.layer-1/.layer-2` 卡片与内嵌块、`elevation-2/4/8/16`。
+- 动效：`--motion-fast 150ms` / `--motion-normal 250ms` / `cubic-bezier(0.2,0,0,1)`；
+  页面进入 fade + `translateY(4px)`；`prefers-reduced-motion` 全部归零。
 - 状态**不只靠颜色**：文字/图标/数值同时存在；错误给"下一步"。
 - Provider 分类色（稳定映射，对齐 `tui/docs/14-usage-analytics.md` §5）：
   `codearts` 紫 · `qoder-cn` 青 · `qoder` 蓝 · `trae-local` 绿 · `workbuddy` 黄 ·
-  `workbuddy-global` 浅紫 · `zcode` 橙 · `loomy` 洋红 · `gateway` 中性。
-- 排版：UI 正文 14px、表格 13px、等宽用于端口/PID/日志；数字对齐右。
-- 半径/间距/阴影使用 shadcn 默认刻度，不另造一套。
-- 无障碍：WCAG 2.1 AA 对比度；全键盘可达；焦点可见；`prefers-reduced-motion` 降低动效。
+  `workbuddy-global` 浅紫 · `zcode` 橙 · `loomy` 洋红 · `raccoon` 红 · `gateway` 中性。
+- 排版：Fluent ramp 12/14/16/20/28px；11px 辅助文案与 13px 表格为密度变体，均满足 AA；
+  等宽用于端口/PID/日志；数字右对齐 + `tabular-nums`。
+- 圆角/阴影：`--radius-2/4/8/12/16` 与 `--shadow-2/4/8/16`，不另造刻度。
+- 无障碍：WCAG 2.1 AA 对比度；全键盘可达；2px accent focus rectangle；`prefers-reduced-motion`
+  降低动效；高对比支持 `prefers-contrast: more` 与 `.high-contrast`。
 
 ## 11. 桥接服务契约（摘要，细节见 05）
 
@@ -341,6 +352,6 @@ type Task = {                          // 对应 TUI 的 Action 内部模型
 | 桥接推送 | **SSE**（fetch + ReadableStream，不用 EventSource） | 单向、够用、可作为 `text/event-stream` 代理；token 走请求头而非 URL |
 | 试打/签到 | **保留但折叠在诊断页**；签到当前只读 | 真实试打需显式确认；统一签到命令尚未接入，不发明 ActionName |
 | React Compiler | **不启用**（后续评估） | 先保证行为可预测与可测 |
-| 主题 | **默认深色 + 跟随系统** | 支持 light/dark/system；`prefers-reduced-motion` 降级 |
+| 主题 | **默认深色 + 跟随系统** | 支持 light/dark/system、normal/high 对比度；`prefers-reduced-motion` 降级 |
 | 包结构 | **`frontend/` 单包** | 不建 workspace，避免污染根目录"零依赖"哲学 |
 | 日志实时 | SSE `event: log`，页面隐藏时断开 | 手动上滚即暂停跟随，保留阅读位置 |
