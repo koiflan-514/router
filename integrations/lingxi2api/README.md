@@ -215,3 +215,7 @@ curl -s http://127.0.0.1:8796/v1/chat/completions -H 'Content-Type: application/
 - **其他 Windows 用户**：DPAPI 主密钥绑定当前用户，换用户解不开，需重新登录桌面端。
 - **协议是逆向的**：app-server 升级可能改 params/事件形状；`/health` 的
   `appServerReady` 与 `modelError` 是第一排查点。
+
+---
+
+← 返回 [integrations 索引](../README.md) ｜ [文档索引](../../docs/README.md)

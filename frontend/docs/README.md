@@ -1,5 +1,7 @@
 # Router 网页面板文档索引
 
+> **时效说明**：部分设计文档写于 2026-11 初的九家基线；当前 `router.mjs` 已扩到十三家，最新 provider 清单以 `node router.mjs list` 与根 README 为准。
+
 本目录是 `frontend/` 网页面板的**设计基线与实现记录**。当前状态：**MVP 已实现**——
 文档、React 19 前端、回环桥接服务、单元/契约/E2E 测试均已完成。进度与差距见
 [13 实现状态](13-implementation-status.md)。
@@ -84,5 +86,5 @@
 | 图表 | Sparkline（文本） | Recharts（面积/柱/折线） |
 | 用量口径 | 相同（OpenCode `experimental.session.stats`） | 相同，来自同一只读接口 |
 
-术语以上位定义 [`tui/docs/12-glossary.md`](../tui/docs/12-glossary.md) 为准，前端新增术语记入本
+术语以上位定义 [`tui/docs/12-glossary.md`](../../tui/docs/12-glossary.md) 为准，前端新增术语记入本
 目录的 [12 术语表](12-glossary.md)。

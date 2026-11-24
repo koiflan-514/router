@@ -121,3 +121,7 @@ node router.mjs logs qwenwork 80
 - **上游 401 会自动重读凭据并重试一次**：桌面端可能刚轮换过 key，重读磁盘通常就恢复了。
 - **两种方言都是原生的**：上游 `/v1/messages` 真支持 Anthropic 协议（含 `thinking` 块），
   网关会优先走原生，不额外转换。
+
+---
+
+← 返回 [integrations 索引](../README.md) ｜ [文档索引](../../docs/README.md)

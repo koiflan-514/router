@@ -1,5 +1,7 @@
 # Router TUI 文档索引
 
+> **时效说明**：部分设计文档写于较早的 provider 基线；当前 provider 数量以 `node router.mjs list` 与根 README 为准。
+
 本目录是 `router-tui` 的设计基线与实现记录。MVP 代码已存在；实际完成度、测试结果和已知差距见 [13 实现状态](13-implementation-status.md)。
 
 ## 约定

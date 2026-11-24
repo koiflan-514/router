@@ -1,5 +1,9 @@
 # 踩坑记录
 
+> **适合**：遇到报错或行为与预期不符，想按症状快速定位。  
+> **前置**：知道 provider id 与基本启停命令。  
+> **相关**：[排查清单](04-checklist.md) · [进程生命周期](09-lifecycle.md) · [本机限流](13-limits.md)
+
 按「代价从高到低」排。每条都给出 **症状 / 真因 / 判断依据 / 修法**，重点是**判断依据**——
 症状会变，判断方法不会。
 
@@ -99,7 +103,7 @@ workbuddy2pi global restart
 
 > 2026-11 起 `router.mjs` 直接 spawn WorkBuddy，每次启动都重新扫描
 > `~/.workbuddy2api/vendor/` 里最新的 `workbuddy2api-*.whl`，不再把路径固化在
-> `serve.cmd` 里。走 router 时升级后只需 `node E:/router/router.mjs restart workbuddy`。
+> `serve.cmd` 里。走 router 时升级后只需 `node router.mjs restart workbuddy`。
 > 旧计划任务仍然适用本条。
 
 **一般化**：任何「服务定义写死路径」的场景（systemd unit、launchd plist、计划任务
@@ -471,18 +475,18 @@ function killProxyChain(port, timeoutMs = 20000) {
 
 ```bash
 # integrations 里的源码与 ~/.local/bin 的副本是否一致
-cmp -s E:/router/integrations/qodbuddy2pi/assets/workbuddy2pi ~/.local/bin/workbuddy2pi && echo same || echo DIFFER
-rg -c "killProxyChain" E:/router/integrations/qodbuddy2pi/assets/workbuddy2pi
+cmp -s integrations/qodbuddy2pi/assets/workbuddy2pi ~/.local/bin/workbuddy2pi && echo same || echo DIFFER
+rg -c "killProxyChain" integrations/qodbuddy2pi/assets/workbuddy2pi
 ```
 
 **修法**
 
 2026-11 起 router 的启动、停止、`ocAdd` 和浏览器登录都优先使用
-`E:/router/integrations/qodbuddy2pi/assets/` 里的源码，不再需要复制到
+`integrations/qodbuddy2pi/assets/` 里的源码，不再需要复制到
 `~/.local/bin`。只有你手工在 shell 里敲 `workbuddy2pi` 时，才会用到旧副本：
 
 ```bash
-cp E:/router/integrations/qodbuddy2pi/assets/{workbuddy2pi,qoder2pi,quota.js,opencode-config.js,tui.js} ~/.local/bin/
+cp integrations/qodbuddy2pi/assets/{workbuddy2pi,qoder2pi,quota.js,opencode-config.js,tui.js} ~/.local/bin/
 ```
 
 > 判断「当前实际跑的是哪份」：看 `node router.mjs list` 的进程 PID，再用
@@ -745,7 +749,7 @@ pi 判断「已配置 / not configured」看的是 `provider.auth.apiKey`，只�
 `not configured`，模型也不会进入 `available` 列表。2026-11-04 修过一次
 `workbuddy.ts` 就是这么漏的。
 
-opencode 没有扩展机制，九家全部走反代配置（`router sync`），但 WorkBuddy 的
+opencode 没有扩展机制，十三家全部走反代配置（`router sync`），但 WorkBuddy 的
 模型清单要用 `workbuddy2pi [global] opencode install` 从 pi 里抄——它内部就是
 `pi --list-models` 取交集，抄的正是扩展那份目录。
 
@@ -1235,3 +1239,7 @@ grep -r "8793\|8785" ~/.config/opencode/opencode.json
 
 **一般化**：**在「可以绕过」的架构里，防护必须放在最内层。** 只在外层做的限制，
 等价于「建议」而不是「约束」。
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[全链路拓扑](01-topology.md) ｜ 下一篇：[Qoder 网关协议要点](03-qoder-protocol.md)

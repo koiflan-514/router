@@ -1,11 +1,15 @@
 # 选择性启停（router）
 
-九个转接全常驻会同时挂着 9 组进程。多数时候你只用一两个，所以 router 把「开哪几个」
+> **适合**：想按需开关某几家、省内存，或避免同时跑太多反代。  
+> **前置**：知道 `on/off/all/none` 会同时改开关、进程与客户端配置。  
+> **相关**：[日常运维](05-operations.md) · [进程生命周期](09-lifecycle.md)
+
+十三家反代全常驻会同时挂着 13 组进程。多数时候你只用一两个，所以 router 把「开哪几个」
 变成一个显式选择，并且由 router 自己启动/停止进程（生命周期细节见
 [09-lifecycle.md](09-lifecycle.md)）。
 
 ```bash
-cd E:\router
+cd <repo>
 node router.mjs list                # 看状态
 node router.mjs on qoder-cn         # 只开 Qoder 国内版，其余关掉
 node router.mjs off workbuddy       # 只关这一家，其余不动
@@ -62,7 +66,7 @@ Trae 如果还没在 opencode 里，router 会从 `/v1/models` 拉目录写一�
 
 ## 状态存在哪
 
-`E:\router\router.json`：
+`<repo>\router.json`：
 
 ```json
 {
@@ -73,7 +77,7 @@ Trae 如果还没在 opencode 里，router 会从 `/v1/models` 拉目录写一�
 
 没写过这个文件时默认**全开**——避免第一次用的人以为坏了。
 
-运行时的 PID 不在这个文件里，而在 `E:\router\.run\processes.json`。它只是加速定位；
+运行时的 PID 不在这个文件里，而在 `<repo>\.run\processes.json`。它只是加速定位；
 即使删掉，`down` 也会按监听端口找到进程。
 
 ## 常见组合
@@ -118,7 +122,7 @@ router 的**启动/停止、`ocAdd`、浏览器登录**现在都优先用
 shell 里敲 `workbuddy2pi` / `qoder2pi` 时，才会用到安装副本：
 
 ```bash
-cp E:/router/integrations/qodbuddy2pi/assets/{workbuddy2pi,qoder2pi,quota.js,opencode-config.js,tui.js} ~/.local/bin/
+cp integrations/qodbuddy2pi/assets/{workbuddy2pi,qoder2pi,quota.js,opencode-config.js,tui.js} ~/.local/bin/
 ```
 
 这个坑排查了两轮才定位到——因为直接跑源码里的脚本是好的。现在判断依据是
@@ -133,3 +137,7 @@ cp E:/router/integrations/qodbuddy2pi/assets/{workbuddy2pi,qoder2pi,quota.js,ope
 - **删**：只删 `.json` 里的；在 `.jsonc` 里的报给调用方，由用户自己处理
 
 早期版本会重写 `.jsonc`，结果把 Trae 的配置从用户文件里挪走了、注释也丢了。已修。
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[怎么把这套经验套到新供应商](06-reuse.md) ｜ 下一篇：[CodeArts Agent（华为云码道）](08-codearts.md)

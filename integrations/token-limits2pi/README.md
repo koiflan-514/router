@@ -34,3 +34,7 @@ node router.mjs pi sync                 # 刷新模型表 + 部署扩展
 `contextWindow: 300000` / `maxTokens: 32000`；扩展直连的 Qoder / WorkBuddy
 模型用 `models.json` 的 `modelOverrides` 套同一组值，所以 `pi --list-models`
 里也是 300K / 32K。
+
+---
+
+← 返回 [integrations 索引](../README.md) ｜ [文档索引](../../docs/README.md)

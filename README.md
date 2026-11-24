@@ -7,6 +7,8 @@ codearts2api、zcode-bridge、loomy2api、raccoon2api、qwenwork2api、dumate2ap
 lingxi2api、lobsterai2api），本目录是一个单独的 git 仓库。第三方来源与许可见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
+完整文档索引与阅读路径见 **[docs/README.md](docs/README.md)**；第一次使用请直接从下方「快速开始」开始。
+
 `router.mjs` 现在**直接启动、停止、重启、探活全部十三家反代**：Qoder、WorkBuddy、
 Trae、CodeArts、ZCode、Loomy、商汤小浣熊、千问办公、百度搭子、WPS 灵犀、有道龙虾都归它管，不再依赖各家的安装脚本来拉起进程。PID、日志与端口清理由
 router 自己维护（见 [docs/09-lifecycle.md](docs/09-lifecycle.md)）。WPS 灵犀（`lingxi`）走官方
@@ -39,7 +41,31 @@ WPS 灵犀 (app-server RPC)   ──► lingxi-proxy   :8796 ──► pi / open
 一个 baseURL、模型名带供应商前缀、某家挂了自动换家。网关是叠加层，不替代任何一家。
 WPS 灵犀也在网关里，但它不吐 tool_calls——编码 agent 的降级链别把它排进去。
 
-## 目录
+## 快速开始
+
+要求：Node.js 20+（建议 22+），Windows 10/11 或 Linux/macOS；至少先在一家官方客户端/桌面端完成登录。
+
+```bash
+# 以下命令均在仓库根目录执行；把 <repo> 换成你的实际路径
+cd <repo>
+node router.mjs doctor      # 自检：命令、文件、端口、opencode
+node router.mjs login       # 缺凭证时按提示登录（会打开浏览器/桌面端）
+node router.mjs up          # 启动已启用的反代
+node router.mjs list        # 看开关、进程、PID、端口、模型数
+node router.mjs sync        # 把 provider 写进 opencode
+node router.mjs pi sync     # 刷新 pi 模型表，并部署积分/限额扩展
+```
+
+跑通后：
+
+- 客户端接入：[两个客户端各自怎么接](#两个客户端各自怎么接)
+- 统一网关：`node router.mjs gateway up`，再 `node router.mjs gateway install`
+- 想先看界面：[TUI 控制仪表盘](#tui-控制仪表盘) / [网页面板](#网页面板)
+- 出错先查：[踩坑记录](docs/02-pitfalls.md)，完整阅读路径见 [文档索引](docs/README.md)。
+
+## 文件地图
+
+> 所有文档的入口在 [docs/README.md](docs/README.md)；本表只列代码、脚本与目录，避免重复维护。
 
 | 文件 | 内容 |
 |---|---|
@@ -49,19 +75,7 @@ WPS 灵犀也在网关里，但它不吐 tool_calls——编码 agent 的降级�
 | [integrations/](integrations/) | **整合进来的反代源码 + 本仓库自写的 Loomy / 小浣熊 / 千问办公 / 百度搭子 / WPS 灵犀代理 + 本地二进制/凭证说明** |
 | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | 第三方来源、commit、许可证与二进制分发限制 |
 | [LICENSE](LICENSE) | 本仓库自身代码的 BSD 3-Clause 许可证；第三方子目录保留各自许可 |
-| [docs/09-lifecycle.md](docs/09-lifecycle.md) | **反代进程生命周期：PID、日志、端口清理、登录自启** |
-| [docs/07-selective.md](docs/07-selective.md) | 选择性启停的原理与三个坑 |
-| [docs/08-codearts.md](docs/08-codearts.md) | CodeArts Agent（华为云）|
-| [docs/10-codearts-no-agent.md](docs/10-codearts-no-agent.md) | **不装 Agent 的 CodeArts 复刻说明：给 AI 的协议、签名与 OAuth 配置稿** |
-| [docs/01-topology.md](docs/01-topology.md) | 全链路拓扑、端口、凭证位置、谁提供什么 |
-| [docs/02-pitfalls.md](docs/02-pitfalls.md) | **踩过的坑**（最有价值的一份）：症状 → 真因 → 判断依据 → 修法 |
-| [docs/03-qoder-protocol.md](docs/03-qoder-protocol.md) | Qoder 网关协议逆向要点（COSY 签名、body 编码、SSE 信封） |
-| [docs/04-checklist.md](docs/04-checklist.md) | 新接入一家供应商时的排查清单（按顺序走） |
-| [docs/05-operations.md](docs/05-operations.md) | 日常运维：启停、换账号、看日志、升级 |
-| [docs/11-gateway.md](docs/11-gateway.md) | **统一网关运维：启停、端口交叉校验、额度快照、排查顺序、与 OpenResolver 对照** |
-| [docs/12-gateway-tuning.md](docs/12-gateway-tuning.md) | **网关调优：降级链怎么配、本地应答怎么关、失败分类怎么读** |
-| [docs/13-limits.md](docs/13-limits.md) | **本机限流：为什么限、四个维度、四档预设、硬约束、三层生效范围** |
-| [docs/06-reuse.md](docs/06-reuse.md) | 怎么把这套经验套到新的供应商上 |
+| **[docs/](docs/README.md)** | **经验手册索引：拓扑、踩坑、协议、运维、网关、限流；按「症状 → 真因 → 判断依据 → 修法」组织** |
 | [scripts/health.mjs](scripts/health.mjs) | 一键体检：端口、模型数、凭证有效期、端到端试打 |
 | [scripts/pi-models.mjs](scripts/pi-models.mjs) | **把全部上游写进 pi 的 `models.json`：本机十三家 + `router-gateway` + 免费供应商（写前备份）** |
 | [scripts/lib/pi-sync.mjs](scripts/lib/pi-sync.mjs) | pi 模型表的唯一写入点：读改写 / 备份 / 合并 / 删除，网关与免费供应商的 provider 构造 |
@@ -70,10 +84,11 @@ WPS 灵犀也在网关里，但它不吐 tool_calls——编码 agent 的降级�
 | [tui/](tui/README.md) | **Rust TUI 控制仪表盘：统一查看、启停、账号、额度、日志与诊断** |
 | [frontend/](frontend/README.md) | **网页面板：React 19 + Vite 的浏览器控制台；经回环桥接复用 CLI 与网关，SSE 推流** |
 
-## 用起来
+## 常用命令
+
+> 以下命令都在仓库根目录执行；`<id>` 换成 `node router.mjs list` 里的 provider id。
 
 ```bash
-cd D:/router
 node router.mjs gateway up        # 起统一网关（:8785，一个端口两种协议）
 node router.mjs gateway install   # 让 opencode 与 pi 用 router-gateway/<供应商>/<模型>
 node router.mjs list             # 看各家状态（开关/进程/PID/opencode/端口）
@@ -136,12 +151,12 @@ node router.mjs providers key openrouter sk-or-...   # 配 key（加密落盘）
 node router.mjs providers test         # 探活（只验地址，不验 key）
 node gateway/selftest.mjs              # 网关自测：66 项（不耗额度）
 
-bash E:/router/check.sh          # 体检 + 全量（10 项）
-bash E:/router/check.sh quick    # 只体检，不消耗额度
-bash E:/router/check.sh tools    # 额外测工具调用（最慢但最能暴露问题）
+bash check.sh                  # 体检 + 全量（10 项）
+bash check.sh quick            # 只体检，不消耗额度
+bash check.sh tools            # 额外测工具调用（最慢但最能暴露问题）
 
-node E:/router/scripts/health.mjs --no-probe
-node E:/router/scripts/health.mjs workbuddy-global    # 只查一个
+node scripts/health.mjs --no-probe
+node scripts/health.mjs workbuddy-global    # 只查一个
 ```
 
 `scripts/health.mjs` 与 `scripts/verify-all.sh` 是**只读**的：不写配置、不改凭证，随时可跑。
@@ -154,7 +169,7 @@ node E:/router/scripts/health.mjs workbuddy-global    # 只查一个
 `tui/` 提供可选的 Rust 终端界面，复用本目录的 Node.js 控制逻辑。先用匿名数据查看界面：
 
 ```bash
-cd D:/router
+cd <repo>
 cargo run --manifest-path tui/Cargo.toml -- --demo
 ```
 
@@ -227,7 +242,7 @@ WorkBuddy 的模型目录以 pi 扩展读到的产品目录为准（`workbuddy.t
 ### 双系统共享账号
 
 两套 Windows（例如 `C:\Users\Administrator` 与 `D:\Users\demo`）共用同一个
-`E:\router` 时，账号和配置默认会各自漂移。router 用 `E:\router\.shared-home`
+`<repo>` 时，账号和配置默认会各自漂移。router 用 `<repo>\.shared-home`
 作为共享库（已在 `.gitignore`，里面是凭证，绝不入库）：
 
 ```bash
@@ -541,3 +556,7 @@ git diff --cached --stat
 | 统一网关 | `router-gateway` | 8785 | ✓ 159 | ✓ 159 | 十三家并集 + combo；由 `gateway install` 写入 |
 
 实时状态跑 `node scripts/health.mjs`。
+
+---
+
+← 返回 [文档索引](docs/README.md) ｜ [文件地图](#文件地图) ｜ [隐私与安全](#隐私与安全)

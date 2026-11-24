@@ -103,3 +103,7 @@ node integrations/lobsterai2api/lobster-proxy.js --port 8797
   `/api/models/<id>/resolve` 换成真实模型；解析失败直接报错，不把档位名当模型名发给上游。
 - **凭据只读**：反代不写 `auth_tokens`；refresh 只发生在内存里。桌面端仍然负责持久化。
 - **登录只能在桌面端**：`router login lobster` 只是把 LobsterAI 拉起来，没有命令行登录接口。
+
+---
+
+← 返回 [integrations 索引](../README.md) ｜ [文档索引](../../docs/README.md)

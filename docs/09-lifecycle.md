@@ -1,19 +1,27 @@
 # 反代进程生命周期（router 直管）
 
-`router.mjs` 从 2026-11 起不再只是「改开关 + 探端口」，而是真正持有九家反代
-（Trae 两段式，共十个子进程）：
+> **适合**：排查「停了但没停干净」「开机没自启」「日志在哪」这类生命周期问题。  
+> **前置**：知道 router 直接 spawn 各家反代。  
+> **相关**：[选择性启停](07-selective.md) · [日常运维](05-operations.md)
+
+`router.mjs` 从 2026-11 起不再只是「改开关 + 探端口」，而是真正持有全部十三家反代
+（Trae 两段式；部分反代还带前置限流代理）：
 
 | 供应商 | 端口 | 实际命令行 | 日志 |
 |---|---|---|---|
 | Qoder 国内版 | 8789 | `node integrations/qodbuddy2pi/assets/qoder-proxy.js --region cn --port 8789` | `~/.qoder2pi/proxy/cn.log` |
 | Qoder 国际版 | 8790 | 同上 `--region global --port 8790` | `~/.qoder2pi/proxy/global.log` |
-| Trae | 7863 | `tw2api.exe` (:7864) → `node img-proxy.js` (:7863) | `E:\router\integrations\traework2api\*.log` |
-| CodeArts Agent | 10087 | `codearts2api.exe -data ... -port 10087` | `E:\router\integrations\codearts2api\run.log` |
+| Trae | 7863 | `tw2api.exe` (:7864) → `node img-proxy.js` (:7863) | `integrations\traework2api\*.log` |
+| CodeArts Agent | 10087 | `codearts2api.exe -data ... -port 10087` | `integrations\codearts2api\run.log` |
 | WorkBuddy 国内版 | 8787 | `uv run --with ... python -m codebuddy_proxy --port 8787` | `~/.workbuddy2api/proxy.log`、`proxy-stdout.log` |
 | WorkBuddy 国际版 | 8788 | 同上 `--global --endpoint https://www.codebuddy.ai` | `~/.workbuddy2api/global/proxy.log`、`global/proxy-stdout.log` |
 | ZCode (Z.ai) | 20131 | `zcode-bridge.exe` | `integrations/zcode-bridge/run.log` |
 | Loomy（讯飞） | 8791 | `node integrations/loomy2api/loomy-proxy.js --port 8791` | `.run/loomy.log` |
 | 商汤小浣熊 | 8793 | `node integrations/raccoon2api/raccoon-proxy.js --port 8793` | `.run/raccoon.log` |
+| 千问办公 | 8794 | `node integrations/qwenwork2api/qwenwork-proxy.js --port 8794` | `.run/qwenwork.log` |
+| 百度搭子 | 8795 | `node integrations/dumate2api/dumate-proxy.js --port 8795` | `.run/dumate.log` |
+| WPS 灵犀 | 8796 | `node integrations/lingxi2api/lingxi-proxy.js --port 8796` | `.run/lingxi.log` |
+| 有道龙虾 | 8797 | `node integrations/lobsterai2api/lobster-proxy.js --port 8797` | `.run/lobster.log` |
 
 `router.mjs list` 里的 **PID** 是监听端口的那个进程。WorkBuddy 的 `uv` 会再拉起
 Python，外层 uv 与内层 cpython 的 PID 不同，停止时按「记录过的 PID 树 + 监听端口」
@@ -55,7 +63,7 @@ Qoder 读 `~/.pi/agent/auth.json`，Trae 读 `auths/*.json`，CodeArts 读
 ## 命令
 
 ```bash
-cd E:/router
+cd <repo>
 node router.mjs list                 # 状态总表
 node router.mjs up                   # 按开关启动全部
 node router.mjs up trae-local         # 只启动一家（不改开关）
@@ -98,13 +106,13 @@ WorkBuddy 的 `uv` 是三层链（`uv.exe` → 缓存里的 builds python → cp
 ## 登录自启
 
 ```bash
-node router.mjs service install              # 九家都注册
+node router.mjs service install              # 十三家都注册
 node router.mjs service install trae-local    # 只注册一家
 node router.mjs service status
 node router.mjs service uninstall trae-local  # 停止并移除
 ```
 
-router 会生成 `E:\router\.run\autostart-<id>.cmd`，并注册名为 `router-<id>` 的
+router 会生成 `<repo>\.run\autostart-<id>.cmd`，并注册名为 `router-<id>` 的
 Windows 计划任务（`ONLOGON`）。脚本内容只有一行：调用
 `router.mjs _autostart <id>`，由 router 拉起真正的反代后退出。
 
@@ -134,3 +142,7 @@ Windows 计划任务（`ONLOGON`）。脚本内容只有一行：调用
 
 然后在 `scripts/health.mjs` 的 `SOURCES` 里加一行，`router.mjs` 会自动获得
 `list` / `up` / `down` / `restart` / `logs` / `doctor` / `service`。
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[CodeArts Agent（华为云码道）](08-codearts.md) ｜ 下一篇：[不装 Agent 的 CodeArts 实现说明](10-codearts-no-agent.md)

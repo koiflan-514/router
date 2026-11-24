@@ -1,5 +1,9 @@
 # CodeArts Agent（华为云码道）
 
+> **适合**：使用或部署 CodeArts Agent（华为云码道）反代。  
+> **前置**：有 CodeArts 账号；自行构建需要 Go 1.22+。  
+> **相关**：[不装 Agent 的 CodeArts](10-codearts-no-agent.md) · [日常运维](05-operations.md)
+
 CodeArts 接入。与前面几家最大的不同：**没有自己写代理，而是复用了一个成熟的第三方
 Go 网关**（[2951461586/CodeArts2API](https://github.com/2951461586/CodeArts2API)）。
 
@@ -37,21 +41,22 @@ snap-access.cn-north-4.myhuaweicloud.com/api/v2/chat/completions
 
 ## 部署
 
-源码已经在 `E:/router/integrations/codearts2api`（Apache-2.0），二进制按许可证
+源码已经在 `integrations/codearts2api`（Apache-2.0），二进制按许可证
 构建后本地使用、不入库：
 
 ```bash
 # 1. 构建（Go 1.22+，零第三方依赖）
-cd E:/router/integrations/codearts2api
+cd integrations/codearts2api
 go build -o codearts2api.exe .
 
 # 2. 首次使用：优先复用 IDE 登录态；没有 IDE 就用浏览器 OAuth
 ./codearts2api.exe -import
-node E:/router/router.mjs login codearts
+cd ../..                    # 回到仓库根目录
+node router.mjs login codearts
 
 # 3. 常驻交给 router（它会带 -data/-port 参数）
-node E:/router/router.mjs up codearts
-node E:/router/router.mjs status
+node router.mjs up codearts
+node router.mjs status
 ```
 
 启动日志会显示续期结果：
@@ -95,16 +100,16 @@ curl -X POST http://127.0.0.1:10087/admin/api/keys -H 'Content-Type: application
 `codearts` 已纳入 router，所以：
 
 ```bash
-node E:/router/router.mjs on codearts        # 只开 CodeArts，其余关掉
-node E:/router/router.mjs up codearts         # 按当前开关启动（不改变开关）
-node E:/router/router.mjs down codearts       # 停止
-node E:/router/router.mjs logs codearts 80    # 日志尾部
-node E:/router/router.mjs all                # 全开
+node router.mjs on codearts        # 只开 CodeArts，其余关掉
+node router.mjs up codearts         # 按当前开关启动（不改变开关）
+node router.mjs down codearts       # 停止
+node router.mjs logs codearts 80    # 日志尾部
+node router.mjs all                # 全开
 ```
 
 重启和收尸都由 router 负责：它带
-`-data E:\router\integrations\codearts2api\codearts2api-data.json -port 10087`
-启动，PID 记在 `E:\router\.run\processes.json`，停止时按 PID 树 + 端口双重清理。
+`-data integrations\codearts2api\codearts2api-data.json -port 10087`
+启动，PID 记在 `<repo>\.run\processes.json`，停止时按 PID 树 + 端口双重清理。
 router 还会从 `/v1/models` 拉目录并写进 `opencode.json`（带 `Authorization` 头，
 签发密钥后列表接口也要鉴权）。
 
@@ -147,3 +152,7 @@ router 还会从 `/v1/models` 拉目录并写进 `opencode.json`（带 `Authoriz
 | 续期 | openapi refresh | 反代 | 反代 | **DPoP + refresh_token** |
 | 计费 | 积分（部分免费） | 免费 | 订阅 | **全部扣积分** |
 | 并发 | 排队限流 | — | — | **每账号 3 会话** |
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[选择性启停（router）](07-selective.md) ｜ 下一篇：[反代进程生命周期（router 直管）](09-lifecycle.md)

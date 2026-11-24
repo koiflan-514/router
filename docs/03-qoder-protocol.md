@@ -1,5 +1,9 @@
 # Qoder 网关协议要点
 
+> **适合**：要改 Qoder 代理，或排查签名 / 编码 / SSE 问题。  
+> **前置**：读过 [全链路拓扑](01-topology.md)，了解 OpenAI 兼容层。  
+> **相关**：[踩坑记录](02-pitfalls.md) · [复用经验](06-reuse.md)
+
 从 `pi-provider-qoder` 与实测反推出来的最小可复现知识。做第三方接入时按这份复制即可。
 
 ## 端点
@@ -221,3 +225,7 @@ POST https://openapi.qoder.com.cn/api/v1/deviceToken/refresh
 ```
 
 国内版**不支持设备授权**（只支持 PAT），国际版两者都支持。
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[踩坑记录](02-pitfalls.md) ｜ 下一篇：[新供应商接入排查清单](04-checklist.md)

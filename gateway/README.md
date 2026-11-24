@@ -1,6 +1,10 @@
 # 统一网关
 
-把九家反代拼成**一个端口、两种协议**，并补上 router 原本缺的三件事：统一入口、
+> **适合**：已跑通至少两家反代，想用一个端口接入 opencode / pi / Claude Code。  
+> **前置**：理解 provider id 与 `<供应商>/<模型>` 的写法。  
+> **相关**：[文档索引](../docs/README.md) · [网关运维](../docs/11-gateway.md) · [网关调优](../docs/12-gateway-tuning.md)
+
+把十三家反代拼成**一个端口、两种协议**，并补上 router 原本缺的三件事：统一入口、
 密钥与用量、跨供应商故障转移。
 
 ```
@@ -24,32 +28,32 @@ Claude Code / opencode / pi / curl
 
 ## 为什么要有这一层
 
-router 原本管的是「进程」：起停九家反代、切账号、看日志。但客户端那边仍然要**逐个**
-配 provider（八份 baseURL、八份模型清单），而且一旦某家挂了，客户端只会报错，不会换家。
+router 原本管的是「进程」：起停十三家反代、切账号、看日志。但客户端那边仍然要**逐个**
+配 provider（十三份 baseURL、十三份模型清单），而且一旦某家挂了，客户端只会报错，不会换家。
 
 网关补上的正是这一层：
 
 | 原来 | 现在 |
 |---|---|
-| 客户端要配 8 个 provider | 配 1 个 `http://127.0.0.1:8785/v1` |
+| 客户端要配 13 个 provider | 配 1 个 `http://127.0.0.1:8785/v1` |
 | 换供应商要改客户端配置 | 模型名写 `<供应商>/<模型>`，或直接写裸模型名自动找 |
 | 某家挂了 → 客户端报错 | 自动换下一家，客户端只看到 200 |
 | 没有统一密钥/配额 | `zsk_` 密钥、供应商/模型/IP 白名单、token 配额 |
 | 不知道用了多少 | 按天 JSONL + `gateway usage` 聚合 |
 | 只看得到「进程在不在」 | 权重、冷却、成功率、粘性会话、并发 |
 
-它**不替代**任何一家反代，只是在前面加了一层。九家的进程、账号、登录仍然由
+它**不替代**任何一家反代，只是在前面加了一层。十三家的进程、账号、登录仍然由
 `router.mjs` 管。
 
 ## 快速开始
 
 ```bash
-# 1. 起网关（它依赖的九家可以按需起，网关自己不做登录）
+# 1. 起网关（它依赖的十三家可以按需起，网关自己不做登录）
 node router.mjs gateway up
 
 # 2. 探活
 curl http://127.0.0.1:8785/health
-curl http://127.0.0.1:8785/v1/models      # 九家的并集，模型名带供应商前缀
+curl http://127.0.0.1:8785/v1/models      # 十三家的并集，模型名带供应商前缀
 
 # 3. 直接用（回环默认免密钥）
 curl -X POST http://127.0.0.1:8785/v1/chat/completions \
@@ -292,7 +296,7 @@ weight = (quotaFactor + idleBonus + successFactor) × manualWeight
 
 这套公式与 OpenResolver 的 `pools/base.mjs` 一致，便于两个项目之间对照排查。
 
-调度单位是**供应商**而不是账号：router 管的九家里，换账号要改文件再重启进程
+调度单位是**供应商**而不是账号：router 管的十三家里，换账号要改文件再重启进程
 （见 [05-operations.md](../docs/05-operations.md)），在一个 HTTP 请求里做账号级切换不现实。
 账号健康通过 `router account check` 暴露，额度通过 `gateway refresh-quota` 写进快照、
 间接参与权重。
@@ -389,7 +393,7 @@ node router.mjs gateway key disable <前缀>
 ```bash
 node router.mjs gateway status     # 权重/额度比/并发/成功率/冷却/粘性
 node router.mjs gateway usage      # 最近 7 天按天聚合（网关没跑也能读）
-node router.mjs gateway balance    # 各家额度汇总（本机 9 家）
+node router.mjs gateway balance    # 各家额度汇总（本机 13 家）
 node router.mjs gateway combo      # 降级链列表
 node router.mjs gateway local      # 本地应答开关
 node router.mjs gateway doctor     # 自检 + 端口交叉校验
@@ -483,7 +487,11 @@ devDependencies，加框架会让「clone 下来就能跑」失效。
 
 ```
 端口交叉校验（router PROVIDERS ↔ gateway DESCRIPTORS）
-✓ 9 家端口一致
+✓ 13 家端口一致
 ```
 
-加第九家时，两处都要改——`doctor` 会告诉你漏了哪边。
+新增一家时，两处都要改——`doctor` 会告诉你漏了哪边。
+
+---
+
+← 返回 [文档索引](../docs/README.md) ｜ [网关运维](../docs/11-gateway.md) ｜ [网关调优](../docs/12-gateway-tuning.md)

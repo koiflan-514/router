@@ -1,20 +1,34 @@
 # integrations
 
-这些是 router 直接托管的第三方反代源码。来源、版本、许可证见根目录
-[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
+router 直接托管的各家反代与桥接源码。来源、版本、许可证见根目录
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。文档总索引见
+[docs/README.md](../docs/README.md)。
 
-```
-integrations/
-  qodbuddy2pi/     Qoder 代理 + WorkBuddy 运维命令 + WorkBuddy wheel
-  traework2api/    Trae tw2api 源码 + img-proxy.js（tw2api.exe 本地忽略）
-  codearts2api/    CodeArts2API Go 源码 + 本机二进制/状态（二进制与状态忽略）
-  zcode-bridge/    ZCode（Z.ai）套餐额度桥（Go 标准库单二进制）
-  loomy2api/       讯飞 Loomy 的 OpenAI 兼容反代（本仓库自写，零依赖 Node）
-  raccoon2api/     商汤小浣熊（Raccoon Work）的 OpenAI 兼容反代（本仓库自写，零依赖 Node）
-  qwenwork2api/    千问办公（QwenWork CN）的 OpenAI/Anthropic 反代（本仓库自写，零依赖 Node）
-  dumate2api/      百度搭子（DuMate）的 OpenAI 兼容反代（本仓库自写，零依赖 Node）
-  lingxi2api/      WPS 灵犀反代（app-server JSON-RPC → OpenAI 对话 + 智点积分；零依赖 Node）
-  lobsterai2api/   有道龙虾（LobsterAI）反代（复用桌面端 tokenProxy / 直连上游 + 积分签到；零依赖 Node）
+## 目录与端口
+
+| 目录 | provider id | 端口 | 说明 | 文档 |
+|---|---|---|---|---|
+| `qodbuddy2pi/` | `qoder-cn` / `qoder` / `workbuddy` / `workbuddy-global` | 8789 / 8790 / 8787 / 8788 | Qoder 代理 + WorkBuddy 运维与 wheel | [README](qodbuddy2pi/README.md) |
+| `traework2api/` | `trae-local` | 7863 / 7864 | Trae 反代（tw2api + img-proxy） | [说明](traework2api/说明.md) |
+| `codearts2api/` | `codearts` | 10087 | CodeArts Go 网关 | [README](codearts2api/README.md) |
+| `zcode-bridge/` | `zcode` | 20131 | ZCode（Z.ai）套餐桥 | [README](zcode-bridge/README.md) |
+| `loomy2api/` | `loomy` | 8791 | 讯飞 Loomy 的 OpenAI 兼容反代 | [README](loomy2api/README.md) |
+| `raccoon2api/` | `raccoon` | 8793 | 商汤小浣熊的 OpenAI 兼容反代 | [README](raccoon2api/README.md) |
+| `qwenwork2api/` | `qwenwork` | 8794 | 千问办公 OpenAI/Anthropic 反代 | [README](qwenwork2api/README.md) |
+| `dumate2api/` | `dumate` | 8795 | 百度搭子 OpenAI 兼容反代 | [README](dumate2api/README.md) |
+| `lingxi2api/` | `lingxi` | 8796 | WPS 灵犀 app-server 桥 + 智点积分 | [README](lingxi2api/README.md) |
+| `lobsterai2api/` | `lobster` | 8797 | 有道龙虾反代 + 积分/签到 | [README](lobsterai2api/README.md) |
+| `token-limits2pi/` | —（pi 扩展） | — | pi 上下文 / 输出限额扩展 | [README](token-limits2pi/README.md) |
+
+## 快速开始
+
+所有命令在仓库根目录执行：
+
+```bash
+node router.mjs list                 # 看 provider id 与端口
+node router.mjs up <id>              # 启动一家
+node router.mjs logs <id> 40         # 看日志
+node router.mjs login <id>           # 缺凭证时登录
 ```
 
 router 的默认路径：
@@ -52,9 +66,13 @@ router 的默认路径：
 ## 本地运行
 
 ```bash
-cd E:/router
+cd <repo>
 node router.mjs up
 node router.mjs list
 ```
 
-运行时的 PID 在 `E:\router\.run\processes.json`（已忽略）。
+运行时的 PID 在 `<repo>\.run\processes.json`（已忽略）。
+
+---
+
+← 返回 [文档索引](../docs/README.md) ｜ [根 README](../README.md)

@@ -1,5 +1,9 @@
 # 统一网关运维
 
+> **适合**：已经跑通单家反代，想用统一网关做单端口接入与故障转移。  
+> **前置**：至少两家反代能独立工作。  
+> **相关**：[网关调优](12-gateway-tuning.md) · [日常运维](05-operations.md)
+
 网关是 `router.mjs` 的一个子命令族，不是第十四家反代。它把十三家的端口拼成一个，
 所以它的运维语义要单独说清——尤其是「为什么它不跟着 `on/off` 走」。
 
@@ -71,7 +75,7 @@ node router.mjs gateway doctor
 
 ```
 端口交叉校验（router PROVIDERS ↔ gateway DESCRIPTORS）
-✓ 11 家端口一致
+✓ 13 家端口一致
 ```
 
 加新一家时两处都要改，`doctor` 会指出漏了哪边。
@@ -106,9 +110,11 @@ node router.mjs gateway refresh-quota
 
 想让它定时跑：
 
+（把 <repo> 换成仓库的绝对路径）
+
 ```bash
 # Windows 计划任务，每 30 分钟
-schtasks /Create /TN router-gateway-quota /TR "node D:\router\router.mjs gateway refresh-quota" /SC MINUTE /MO 30
+schtasks /Create /TN router-gateway-quota /TR "node <repo>\router.mjs gateway refresh-quota" /SC MINUTE /MO 30
 ```
 
 ## 排查顺序
@@ -157,3 +163,7 @@ schtasks /Create /TN router-gateway-quota /TR "node D:\router\router.mjs gateway
    「密钥没生成」。
 3. **回环默认完全放行，带无效密钥也不拦。** opencode / pi 会强制带占位 `apiKey`，
    只放行「完全不带密钥」会让它们全部 401。
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[不装 Agent 的 CodeArts 实现说明](10-codearts-no-agent.md) ｜ 下一篇：[网关调优](12-gateway-tuning.md)

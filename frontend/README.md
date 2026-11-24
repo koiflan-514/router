@@ -1,5 +1,11 @@
 # Router 网页面板
 
+> **适合**：想用浏览器面板管理本机 router。  
+> **前置**：Node.js 20+；首次运行需 `cd frontend && npm install`。  
+> **相关**：[文档索引](../docs/README.md) · [前端文档](docs/README.md) · [根 README](../README.md)
+
+> **时效说明**：网页面板当前的白名单与设计基线覆盖 9 家本机反代；新增的千问办公、百度搭子、WPS 灵犀、有道龙虾请用 CLI 或 TUI。
+
 > 状态：**MVP 已实现（文档 + 代码 + 测试）**
 > 目标平台：现代桌面浏览器（Chromium / Firefox / Safari 最新稳定）
 > 运行时：本机 Node.js（桥接服务）+ 浏览器（React 19 单页应用）
@@ -105,3 +111,7 @@ PANEL_REAL_SMOKE=1 npx vitest run tests/bridge-real.test.ts   # 可选：真实�
 - [12 术语表](docs/12-glossary.md)
 - [13 实现状态](docs/13-implementation-status.md)
 - [14 用量分析设计](docs/14-usage-analytics.md)
+
+---
+
+← 返回 [文档索引](../docs/README.md) ｜ [前端文档](docs/README.md)

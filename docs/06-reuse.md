@@ -1,5 +1,9 @@
 # 怎么把这套经验套到新供应商
 
+> **适合**：想把 router 的模式套到另一家订阅或客户端上。  
+> **前置**：读过 [排查清单](04-checklist.md)。  
+> **相关**：[全链路拓扑](01-topology.md) · [踩坑记录](02-pitfalls.md)
+
 目标：把新供应商（比如 GitHub Copilot、Cursor、Windsurf、某某国产 IDE）也接到 pi 与
 opencode。以下是从前面几家总结出来的通用路径。
 
@@ -131,3 +135,7 @@ if (serviceWheel !== currentWheel) warn('服务仍在跑旧反代');
 
 **共性**：几家都不约而同把「真实可用的模型清单」放在客户端落盘配置里，而不是 API
 响应里。这是最值得记住的一条。
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[日常运维](05-operations.md) ｜ 下一篇：[选择性启停（router）](07-selective.md)

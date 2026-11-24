@@ -68,3 +68,7 @@ node router.mjs logs raccoon 80
   `raccoon-405a1c` 在目录里是隐藏的，但桌面端默认就用第一个。
 - **生图不能走 chat/completions**：走 `/v1/images/generations`。
 - **token 30 天**：IAM JWT 由桌面端自动 refresh；反代只读文件，不写回。
+
+---
+
+← 返回 [integrations 索引](../README.md) ｜ [文档索引](../../docs/README.md)

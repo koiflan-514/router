@@ -1,5 +1,9 @@
 # Router TUI 控制仪表盘
 
+> **适合**：想在终端里统一查看、启停、切号、看额度与日志。  
+> **前置**：Rust 1.88+；真实后端还需要 Node.js 与本仓库的 `router.mjs`。  
+> **相关**：[文档索引](../docs/README.md) · [TUI 文档](docs/README.md) · [根 README](../README.md)
+
 > 状态：**MVP 已实现，Windows/Linux 均已运行验证**  
 > 版本：0.1.0  
 > 目标平台：Windows、Linux 终端  
@@ -9,7 +13,7 @@
 
 ## 已实现
 
-- **总览**：全部 provider（九家反代 + 统一网关叠加层）的开关、进程、认证、客户端、端口、模型数和额度摘要。
+- **总览**：全部 provider（十三家反代 + 统一网关叠加层）的开关、进程、认证、客户端、端口、模型数和额度摘要。
 - **服务**：启动、停止、停止但保留客户端、重启、仅启用、关闭、全部启用/关闭和同步。
 - **用量分析**：OpenCode 真实会话/步骤 KPI、Token 构成、每日活动、工具成功率和模型/Provider 聚合，支持 24h/7d/30d/全部历史。
 - **额度**：按 provider/账号展示余额、总量、单位、重置日、可领取状态和数据时间；不跨厂商汇总。
@@ -106,7 +110,7 @@ ROUTER_TUI_TEST_ROOT=/path/to/router cargo test --test pty_smoke live_readonly_s
 Windows PowerShell：
 
 ```powershell
-$env:ROUTER_TUI_TEST_ROOT = "D:\router"
+$env:ROUTER_TUI_TEST_ROOT = "<repo>"
 cargo test local_readonly_smoke -- --ignored --nocapture
 cargo test --test pty_smoke live_readonly_starts_in_a_pty_and_reads_providers -- --ignored --nocapture
 ```
@@ -149,14 +153,14 @@ cargo build
 | `raccoon` | 商汤小浣熊 | 8793 | 服务、单账号、登录态、积分（credits）、模型倍率 |
 | `gateway` | 统一网关（叠加层） | 8785 | 服务、进程、模型并集；不参与 on/off |
 
-`gateway` 是叠加层，不是第十家反代：`router.mjs list` 把它的「开关」直接取进程状态，TUI 因此显示为**叠加**，不计入「启用 x/y」，也不会报配置漂移。启停用它自己的命令：
+`gateway` 是叠加层，不是第十四家反代：`router.mjs list` 把它的「开关」直接取进程状态，TUI 因此显示为**叠加**，不计入「启用 x/y」，也不会报配置漂移。启停用它自己的命令：
 
 ```bash
 node router.mjs gateway up
 node router.mjs gateway down
 ```
 
-在服务页对网关按 `o`/`x` 会被拒绝并给出这条提示，避免 `on gateway` 顺手把其它九家的 opencode provider 全删掉。
+在服务页对网关按 `o`/`x` 会被拒绝并给出这条提示，避免 `on gateway` 顺手把其它十三家的 opencode provider 全删掉。
 
 运行时数量和能力以真实后端返回为准。
 
@@ -198,3 +202,7 @@ tui/
 │   └── ui.rs            六页、弹窗、主题与 TestBackend 测试
 └── .github 根工作流（位于仓库级 .github/workflows/tui.yml）
 ```
+
+---
+
+← 返回 [文档索引](../docs/README.md) ｜ [TUI 文档](docs/README.md)

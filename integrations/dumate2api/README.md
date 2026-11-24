@@ -147,3 +147,7 @@ curl -s http://127.0.0.1:8795/v1/quota
   表现为「回复为空 + finish_reason=length」，不是故障。
 - **不签到**：积分在桌面端签到/购买，反代与 credits 插件都只读。
 - **端口与 key 都会变**：两者都只在启动时写日志，所以日志查找必须覆盖整份文件（见上）。
+
+---
+
+← 返回 [integrations 索引](../README.md) ｜ [文档索引](../../docs/README.md)

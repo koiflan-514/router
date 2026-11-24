@@ -1,5 +1,9 @@
 # 网关调优
 
+> **适合**：网关已经跑起来，想调降级链、权重、本地应答与失败分类。  
+> **前置**：读过 [网关运维](11-gateway.md)。  
+> **相关**：[网关运维](11-gateway.md) · [本机限流](13-limits.md)
+
 这份讲「怎么配」，[11-gateway.md](11-gateway.md) 讲「怎么运维」。
 
 ## 降级链怎么配
@@ -117,7 +121,7 @@ node router.mjs gateway usage --days 7
 | `router.mjs on/off` | 进程起不起 | 网关连不上这家 → 模型目录里没有它 |
 | `config.weights` | 选不选它 | 进程在跑，但调度不选 |
 
-一个常见组合：`node router.mjs all`（九家全起）+ `weights: {"workbuddy": 0}`
+一个常见组合：`node router.mjs all`（十三家全起）+ `weights: {"workbuddy": 0}`
 （但别选 WorkBuddy）。这样随时能切回来，不用等进程冷启动。
 
 ## 加新一家供应商时
@@ -148,3 +152,7 @@ Anthropic，直接打 `/v1/messages` 打空了。
 一个容易忽略的点：**本机三家「可用」不等于装了就绪**。`providers list` 会补一次
 轻量探测，没在跑的显示「待配置」而不是「可用」——否则模型列表里会出现一堆
 点了就报错的条目。
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[统一网关运维](11-gateway.md) ｜ 下一篇：[本机限流](13-limits.md)

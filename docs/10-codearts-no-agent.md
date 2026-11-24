@@ -1,5 +1,9 @@
 # CodeArts 反代：不安装 Agent 的实现说明
 
+> **适合**：不想安装 CodeArts Agent，想用最小实现复刻登录、签名与网关。  
+> **前置**：熟悉 HTTP/OAuth 与 Node.js 或 Go。  
+> **相关**：[CodeArts](08-codearts.md) · [Qoder 协议](03-qoder-protocol.md)
+
 > 目标：把 CodeArts Agent（华为云码道 / CodeArts Doer for Coding）的模型能力，
 > 接进任意 OpenAI / Anthropic 兼容客户端，**但不下载、不安装整个 CodeArts Agent**。
 >
@@ -9,7 +13,7 @@
 >
 > 本文是给“人 + AI”看的实现稿：把 §0 的提示词和 §2–§5 的协议事实一起交给 AI，
 > 它就能从零写一个最小可用版本。完整实现（账号池、控制台、Anthropic 协议）
-> 在 `E:\router\integrations\codearts2api`，本文只保留**不装 Agent 的最小路径**。
+> 在 `integrations\codearts2api`，本文只保留**不装 Agent 的最小路径**。
 
 ---
 
@@ -746,6 +750,10 @@ model    = glm-5.3-flash
 - Anthropic `/v1/messages` 与 `thinking` / `tool_use` 映射
 - Prometheus `/metrics`
 
-直接复用 `E:\router\integrations\codearts2api`（Apache-2.0）即可；它已经实现了
+直接复用 `integrations\codearts2api`（Apache-2.0）即可；它已经实现了
 上面全部内容，并且本文的 OAuth、签名、错误分类都来自同一套代码与测试。
 本文的价值是：**把“必须知道的上游事实”压缩到一页，让 AI 不必先读完整个项目**。
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[反代进程生命周期（router 直管）](09-lifecycle.md) ｜ 下一篇：[统一网关运维](11-gateway.md)

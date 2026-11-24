@@ -1,33 +1,30 @@
 # 全链路拓扑
 
+> **适合**：第一次接触项目，想先看清整体链路、端口与凭证位置。  
+> **前置**：无；建议先读 [根 README 快速开始](../README.md#快速开始)。  
+> **相关**：[文档索引](README.md) · [日常运维](05-operations.md) · [进程生命周期](09-lifecycle.md)
+
 ## 一张图
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│ 消费端                                                               │
-│   pi            —— 原生协议（扩展直接注册 provider）                   │
-│   opencode      —— 只会说 OpenAI /v1/chat/completions                │
-└───────────┬─────────────────────────────────┬───────────────────────┘
-            │                                 │
-┌───────────▼─────────────┐   ┌───────────────▼───────────────────────┐
-│ Qoder 私有协议           │   │ OpenAI 兼容                           │
-│ qoder-proxy.js           │   │ WorkBuddy 反代 (codebuddy_proxy)       │
-│   :8789 (cn)             │   │   :8787 (国内)  :8788 (国际)           │
-│   :8790 (global)         │   │ Trae: tw2api :7864 → img-proxy :7863  │
-│                           │   │ CodeArts2API :10087                   │
-│   │ Loomy: loomy-proxy :8791               │
-│   │ 小浣熊: raccoon-proxy :8793            │
-│   │ 千问办公: qwenwork-proxy :8794         │
-│   │ 百度搭子: dumate-proxy :8795           │
-│   │ WPS 灵犀: lingxi-proxy :8796           │
-│   │ 有道龙虾: lobster-proxy :8797          │
-└───────────┬─────────────┘   └───────────────┬───────────────────────┘
-            │                                 │
-┌───────────▼─────────────┐   ┌───────────────▼───────────────────────┐
-│ gateway.qoder.com.cn    │   │ copilot.tencent.com   (国内)           │
-│ api3.qoder.sh           │   │ www.codebuddy.ai      (国际)           │
-│ + openapi.* (只读接口)   │   │ snap-access.cn-north-4.myhuaweicloud  │
-└─────────────────────────┘   └───────────────────────────────────────┘
+```text
+上游 → 本机反代 → 消费端
+
+Qoder（COSY 私有协议）          → qoder-proxy.js    :8789(cn) / :8790(global) → pi
+WorkBuddy（OpenAI）             → codebuddy_proxy   :8787(cn) / :8788(global) → opencode
+Trae（第三方，OpenAI）          → tw2api :7864 → img-proxy :7863
+CodeArts（SDK-HMAC）            → CodeArts2API      :10087
+ZCode（Z.ai 套餐）              → zcode-bridge      :20131
+Loomy（讯飞 iModel）            → loomy-proxy       :8791 → pi / opencode
+商汤小浣熊（OpenAI 兼容）       → raccoon-proxy     :8793 → pi / opencode
+千问办公（OpenAI + Anthropic）  → qwenwork-proxy    :8794 → pi / opencode
+百度搭子（OpenAI 兼容）         → dumate-proxy      :8795 → pi / opencode
+WPS 灵犀（app-server JSON-RPC） → lingxi-proxy      :8796 → pi / opencode（不吐 tool_calls）
+有道龙虾（LobsterAI）           → lobster-proxy     :8797 → pi / opencode
+
+可选叠加层：十三家 → router-gateway :8785 → Claude Code / opencode / pi
+
+上游示例：Qoder = gateway.qoder.com.cn / api3.qoder.sh；WorkBuddy = copilot.tencent.com / www.codebuddy.ai；
+          CodeArts = snap-access.cn-north-4.myhuaweicloud.com。
 ```
 
 ## 为什么 Qoder 需要自己写代理
@@ -62,7 +59,7 @@ OpenAI 格式。**判断新供应商要不要写代理：看它是否说 OpenAI�
 | 8785 | gateway/server.mjs | `router.mjs gateway up` | `/v1/*`, `/v1/gateway/*`（**叠加层，可选**） |
 
 各家反代的进程都由 `router.mjs` 直接 spawn，PID 记录在
-`E:\router\.run\processes.json`。Windows 登录自启用
+`<repo>\.run\processes.json`。Windows 登录自启用
 `node router.mjs service install [id...]` 生成 `router-<id>` 计划任务；旧的
 `qoder2pi-proxy` / `workbuddy2pi` 任务可以保留，router 启动前会先把它们 `/End`。
 
@@ -73,7 +70,7 @@ OpenAI 格式。**判断新供应商要不要写代理：看它是否说 OpenAI�
 | Qoder | `~/.pi/agent/auth.json` 的 `qoder-cn` / `qoder` | `access`(job/device token) + `refresh` + `machineID` |
 | WorkBuddy | `~/.codebuddy-session.json`、`~/.codebuddy-global-session.json` | `auth.accessToken`、`auth.expiresAt`、`account.nickname` |
 | WorkBuddy 多账号 | `~/.workbuddy2api/sessions/*.json`、`sessions-global/` | 每个 slot 一份；生效文件是上面那两个 |
-| Trae | `E:\router\integrations\traework2api\auths\trae-*.json` | 反代自己维护，`router login trae-local` 写入 |
+| Trae | `integrations\traework2api\auths\trae-*.json` | 反代自己维护，`router login trae-local` 写入 |
 | CodeArts | `%APPDATA%\codearts-agent\User\globalStorage\state.vscdb` | AK/SK/STS + refresh_token，DPAPI + AES-GCM；由 CodeArts2API 解密并续期 |
 | Loomy | `C:\Users\Public\Loomy\<用户 hash>\userData\auth-session.json` | `session`(32 位) + `userid` + `phone`；桌面端写入，反代只读 |
 | 商汤小浣熊 | `~/.office-raccoon/agent/config/auth.json` | `access_token`（IAM JWT，30 天）+ `office_identity`；旧版在 `~/.box-agent/config/auth.json` |
@@ -117,3 +114,7 @@ provider 与顶层设置原样保留，改写前备份。
 WorkBuddy 的反代静态表里列着服务端根本不认的 `claude-4.0`/`gpt-5`，却漏了真正能用的
 `deepseek-v4.1-flash`。pi 扩展读的是桌面端落盘的产品配置（`~/.workbuddy/cache/
 acc-product-config-v*.json`），那份才对。所以 `opencode install` 优先采用 pi 的清单。
+
+---
+
+← [文档索引](README.md) ｜ 下一篇：[踩坑记录](02-pitfalls.md)

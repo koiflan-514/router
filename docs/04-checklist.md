@@ -1,5 +1,9 @@
 # 新供应商接入排查清单
 
+> **适合**：准备接入一家新供应商，需要按顺序排除问题。  
+> **前置**：能跑通至少一家现有反代。  
+> **相关**：[复用经验](06-reuse.md) · [踩坑记录](02-pitfalls.md)
+
 按顺序走。**每一步都有明确的「通过判据」，不要跳步**——跳过中间步骤会让你在最后
 面对一个不知道哪层坏的结果。
 
@@ -92,8 +96,8 @@ pi --provider X --model Y -p "Read <file> and tell me its contents"    # 验证�
 | 登录后凭证生效 | 正在跑的反代自动重启；`list` 的登录态和 `/v1/models` 都恢复 |
 
 ```bash
-node E:/router/router.mjs login <id>
-node E:/router/router.mjs list --json   # providers[].auth
+node router.mjs login <id>
+node router.mjs list --json   # providers[].auth
 ```
 
 ## 阶段 6：做成常驻，并验证「跑的是新代码」
@@ -107,8 +111,8 @@ node E:/router/router.mjs list --json   # providers[].auth
 验证判据：
 
 ```bash
-node E:/router/router.mjs status        # PID、端口、模型数
-node E:/router/router.mjs logs <id> 40  # 进程实际输出
+node router.mjs status        # PID、端口、模型数
+node router.mjs logs <id> 40  # 进程实际输出
 ```
 
 不要只看磁盘上放了什么；要看进程实际加载的版本（旧计划任务用
@@ -135,3 +139,7 @@ node E:/router/router.mjs logs <id> 40  # 进程实际输出
 - ❌ 相信 `displayTips` 的字面意思 —— 它常把人引向错误方向
 - ❌ 一次补齐所有猜测再测 —— 无法定位是哪个没生效
 - ❌ 看磁盘上的版本判断「升级成功」 —— 要看进程加载的版本
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[Qoder 网关协议要点](03-qoder-protocol.md) ｜ 下一篇：[日常运维](05-operations.md)

@@ -1,44 +1,48 @@
 # 日常运维
 
+> **适合**：日常使用与运维：启停、切号、刷新模型、升级、看日志。  
+> **前置**：已完成 [快速开始](../README.md#快速开始)。  
+> **相关**：[选择性启停](07-selective.md) · [进程生命周期](09-lifecycle.md) · [本机限流](13-limits.md)
+
 ## 一眼看状态
 
 ```bash
-node E:/router/router.mjs list                 # 开关 / 进程 / PID / opencode / 端口
-node E:/router/router.mjs account              # 账号池 / 当前生效账号
-node E:/router/router.mjs doctor               # 命令、文件、端口、opencode 自检
-node E:/router/scripts/health.mjs              # 端口 + 凭证 + 端到端试打
-node E:/router/scripts/health.mjs --no-probe   # 只看端口与凭证（省额度）
-bash E:/router/scripts/verify-all.sh           # pi + opencode 全量
-bash E:/router/scripts/verify-all.sh tools     # 工具调用（最慢，最有用）
+node router.mjs list                 # 开关 / 进程 / PID / opencode / 端口
+node router.mjs account              # 账号池 / 当前生效账号
+node router.mjs doctor               # 命令、文件、端口、opencode 自检
+node scripts/health.mjs              # 端口 + 凭证 + 端到端试打
+node scripts/health.mjs --no-probe   # 只看端口与凭证（省额度）
+bash scripts/verify-all.sh           # pi + opencode 全量
+bash scripts/verify-all.sh tools     # 工具调用（最慢，最有用）
 ```
 
 ## 启停反代
 
-八个反代统一走 router，不再分别调各家的 `start` / `stop`：
+十三家反代统一走 router，不再分别调各家的 `start` / `stop`：
 
 ```bash
-node E:/router/router.mjs up                   # 按开关启动（开关为空时什么都不启动）
-node E:/router/router.mjs up --all              # 先全开再启动，等价于 router.mjs all
-node E:/router/router.mjs up trae-local         # 只启动一家（不改开关）
-node E:/router/router.mjs restart workbuddy     # 重启
-node E:/router/router.mjs down                 # 停止全部
-node E:/router/router.mjs down --keep-oc        # 只停进程，保留 opencode provider
-node E:/router/router.mjs logs codearts 80      # 日志尾部
+node router.mjs up                   # 按开关启动（开关为空时什么都不启动）
+node router.mjs up --all              # 先全开再启动，等价于 router.mjs all
+node router.mjs up trae-local         # 只启动一家（不改开关）
+node router.mjs restart workbuddy     # 重启
+node router.mjs down                 # 停止全部
+node router.mjs down --keep-oc        # 只停进程，保留 opencode provider
+node router.mjs logs codearts 80      # 日志尾部
 ```
 
 生命周期、PID 与端口清理细节见 [09-lifecycle.md](09-lifecycle.md)。
 
 ## 双系统共享账号
 
-双系统共用 `E:\router` 时，用共享库把两边的登录态、账号池和 opencode/pi 配置对齐：
+双系统共用 `<repo>` 时，用共享库把两边的登录态、账号池和 opencode/pi 配置对齐：
 
 ```bash
-node E:/router/router.mjs sync-homes                 # 立即同步
-node E:/router/router.mjs sync-homes --status        # 只读查看
-node E:/router/router.mjs sync-homes --homes "C:\Users\Administrator;D:\Users\demo"
+node router.mjs sync-homes                 # 立即同步
+node router.mjs sync-homes --status        # 只读查看
+node router.mjs sync-homes --homes "C:\Users\Administrator;D:\Users\demo"
 ```
 
-共享库固定在 `E:\router\.shared-home`，每次 `router.mjs` 启动/退出也会自动跑一次。
+共享库固定在 `<repo>\.shared-home`，每次 `router.mjs` 启动/退出也会自动跑一次。
 WorkBuddy 账号池按 uid 并集合并；Qoder 单账号首次同步固定为当时账号，之后同 userID
 自动续期，明确重新登录会更新共享账号；当前 WorkBuddy 账号以最后一次 `account` 切换为准。
 覆盖前都会在文件旁留 `.bak-sync-<时间>` 备份。
@@ -56,10 +60,10 @@ router 会先读凭证文件，不靠端口猜：
 | WorkBuddy | `~/.codebuddy*-session.json` 的 `auth.accessToken` | `workbuddy2pi [global] login` |
 
 ```bash
-node E:/router/router.mjs login                 # 当前开启的供应商逐个检查
-node E:/router/router.mjs login qoder           # 只登录国际版
-node E:/router/router.mjs login trae-local       # 会临时启动 tw2api，登录后恢复原状态
-node E:/router/router.mjs login --force          # 已登录也重新走一遍
+node router.mjs login                 # 当前开启的供应商逐个检查
+node router.mjs login qoder           # 只登录国际版
+node router.mjs login trae-local       # 会临时启动 tw2api，登录后恢复原状态
+node router.mjs login --force          # 已登录也重新走一遍
 ```
 
 交互式 `up` / `all` / `on` / `reload` 默认会自动打开浏览器；脚本、计划任务或管道里
@@ -67,7 +71,7 @@ node E:/router/router.mjs login --force          # 已登录也重新走一遍
 
 > router 调用的是 `integrations/qodbuddy2pi/assets` 里的源码。想在 shell 里直接敲
 > `qoder2pi` / `workbuddy2pi`，可以加别名：
-> `alias qoder2pi='node E:/router/integrations/qodbuddy2pi/assets/qoder2pi'`。
+> `alias qoder2pi='node integrations/qodbuddy2pi/assets/qoder2pi'`。
 
 ## 切换账号
 
@@ -75,13 +79,13 @@ node E:/router/router.mjs login --force          # 已登录也重新走一遍
 CodeArts 控制台或 Trae 的 state 文件：
 
 ```bash
-node E:/router/router.mjs account                    # 所有账号 + 当前生效
-node E:/router/router.mjs account workbuddy          # 只看一家
-node E:/router/router.mjs account workbuddy b        # 切到 slot b（运行中会自动重启）
-node E:/router/router.mjs account codearts GT-demo   # 只启用这个账号
-node E:/router/router.mjs account trae-local --all      # 恢复整池参与调度
-node E:/router/router.mjs account codearts 2 --dry-run  # 预览，不写文件不重启
-node E:/router/router.mjs account add workbuddy         # 浏览器登录，往池里加一个账号
+node router.mjs account                    # 所有账号 + 当前生效
+node router.mjs account workbuddy          # 只看一家
+node router.mjs account workbuddy b        # 切到 slot b（运行中会自动重启）
+node router.mjs account codearts GT-demo   # 只启用这个账号
+node router.mjs account trae-local --all      # 恢复整池参与调度
+node router.mjs account codearts 2 --dry-run  # 预览，不写文件不重启
+node router.mjs account add workbuddy         # 浏览器登录，往池里加一个账号
 ```
 
 添加账号统一用 `account add <id>`（等价写法 `account <id> --add`）。它会走该家
@@ -92,10 +96,10 @@ node E:/router/router.mjs account add workbuddy         # 浏览器登录，往�
 ## 增删账号与账号体检
 
 ```bash
-node E:/router/router.mjs account check                 # 只列出需要处理的账号
-node E:/router/router.mjs account remove workbuddy c    # 删除 slot c
-node E:/router/router.mjs account remove trae-local 3 --force   # 有故障的账号要 --force
-node E:/router/router.mjs account restore workbuddy     # 从归档恢复
+node router.mjs account check                 # 只列出需要处理的账号
+node router.mjs account remove workbuddy c    # 删除 slot c
+node router.mjs account remove trae-local 3 --force   # 有故障的账号要 --force
+node router.mjs account restore workbuddy     # 从归档恢复
 ```
 
 **删除是两步的：先归档，再从调度池移除。** WorkBuddy 的 slot 与 Trae 的
@@ -184,7 +188,7 @@ ROUTER_CODEARTS_KEEP=browser node router.mjs account merge codearts   # 改保�
 上游加/删模型后，一条命令刷新所有已开启的（先备份 `opencode.json`）：
 
 ```bash
-node E:/router/router.mjs models            # 也可只刷某几家：models zcode loomy raccoon qwenwork
+node router.mjs models            # 也可只刷某几家：models zcode loomy raccoon qwenwork
 ```
 
 按来源走的分支：Qoder / Trae / CodeArts / ZCode / Loomy 直接拉 `/v1/models`；
@@ -198,10 +202,10 @@ ZCode 的 opencode 侧长期只有 1 个模型、Qoder 国内版还留着上游�
 pi 侧单独操作：
 
 ```bash
-node E:/router/router.mjs pi            # provider、模型数、扩展状态
-node E:/router/router.mjs pi sync       # 刷新 pi 模型表 + 部署积分/限额扩展
-node E:/router/router.mjs pi install --force   # 只重装扩展
-node E:/router/router.mjs pi install --limits  # 只装 /limits 限额扩展
+node router.mjs pi            # provider、模型数、扩展状态
+node router.mjs pi sync       # 刷新 pi 模型表 + 部署积分/限额扩展
+node router.mjs pi install --force   # 只重装扩展
+node router.mjs pi install --limits  # 只装 /limits 限额扩展
 ```
 
 pi 侧所有模型默认 **300k 上下文 / 32k 输出**：`scripts/lib/pi-sync.mjs` 写
@@ -218,10 +222,10 @@ pi 侧所有模型默认 **300k 上下文 / 32k 输出**：`scripts/lib/pi-sync.
 需要分来源手工刷新时：
 
 ```bash
-node E:/router/integrations/qodbuddy2pi/assets/qoder2pi opencode install
-node E:/router/integrations/qodbuddy2pi/assets/workbuddy2pi opencode install
-node E:/router/integrations/qodbuddy2pi/assets/workbuddy2pi global opencode install
-node E:/router/scripts/pi-models.mjs          # pi 的 Trae / CodeArts / ZCode / Loomy
+node integrations/qodbuddy2pi/assets/qoder2pi opencode install
+node integrations/qodbuddy2pi/assets/workbuddy2pi opencode install
+node integrations/qodbuddy2pi/assets/workbuddy2pi global opencode install
+node scripts/pi-models.mjs          # pi 的 Trae / CodeArts / ZCode / Loomy
 ```
 
 Trae 的 provider 在用户自管的 `~/.config/opencode/opencode.jsonc` 里（带注释，router
@@ -237,7 +241,7 @@ Trae 的 provider 在用户自管的 `~/.config/opencode/opencode.jsonc` 里（�
 - WorkBuddy **不要**抄反代的 `/v1/models`，那是包作者的静态表。国内版读
   `~/.workbuddy/cache/acc-product-config-v*.json`；国际版没有桌面端目录时用
   `workbuddy.ts` 里的静态表，按上游 `/v3/config` 和当前账号实测维护。
-- 刷新后跑 `node E:/router/router.mjs list` 与 `node E:/router/scripts/health.mjs --no-probe`
+- 刷新后跑 `node router.mjs list` 与 `node scripts/health.mjs --no-probe`
   对一下数量；两个客户端可用 `opencode models` / `pi --list-models` 复查。
 
 ## ZCode（Z.ai）
@@ -616,15 +620,15 @@ curl -s -X POST http://127.0.0.1:8797/v1/checkin   # 签到（今天已签会回
 ```bash
 qoder2pi status                 # pi、扩展、两个区域、opencode 代理
 qoder2pi login cn pt-xxxxxx     # 国内版（PAT）
-node E:/router/router.mjs login qoder   # 国际版：浏览器 OAuth（推荐）
+node router.mjs login qoder   # 国际版：浏览器 OAuth（推荐）
 qoder2pi logout cn              # 退出（auth.json 先备份）
 qoder2pi models                 # 两个区域各自在 pi 里可见的模型
 
 # 代理启停统一用 router（qoder2pi proxy 仍可用于看状态/兼容旧习惯）
-node E:/router/router.mjs up qoder-cn
-node E:/router/router.mjs restart qoder
-node E:/router/router.mjs down qoder-cn
-node E:/router/router.mjs logs qoder-cn 50
+node router.mjs up qoder-cn
+node router.mjs restart qoder
+node router.mjs down qoder-cn
+node router.mjs logs qoder-cn 50
 
 qoder2pi opencode status
 qoder2pi opencode uninstall     # 兼容旧命令；日常用 router sync
@@ -649,19 +653,19 @@ pi 里同一份数据换成交互入口：`node router.mjs pi sync` 部署
 ```bash
 workbuddy2pi status             # 服务、端点、凭证、账号
 workbuddy2pi logs 100           # 反代自己的日志尾部（router logs 也行）
-node E:/router/router.mjs login workbuddy          # 浏览器登录并建档
-node E:/router/router.mjs login workbuddy-global   # 国际版
+node router.mjs login workbuddy          # 浏览器登录并建档
+node router.mjs login workbuddy-global   # 国际版
 workbuddy2pi account renew      # 续期当前账号
 workbuddy2pi opencode install   # 只写 opencode 配置，不会重启反代
 
 # 查/切账号统一用 router（会直接重启反代，不依赖计划任务）
-node E:/router/router.mjs account workbuddy
-node E:/router/router.mjs account workbuddy <key>
+node router.mjs account workbuddy
+node router.mjs account workbuddy <key>
 
 # 启停统一用 router
-node E:/router/router.mjs up workbuddy
-node E:/router/router.mjs restart workbuddy
-node E:/router/router.mjs down workbuddy
+node router.mjs up workbuddy
+node router.mjs restart workbuddy
+node router.mjs down workbuddy
 
 workbuddy2pi global <命令>       # 同上，作用于国际版
 ```
@@ -1043,15 +1047,15 @@ wheel 版本影响服务端能否接受请求（见 `02-pitfalls.md` P1），升
 
 ```bash
 # 1. 放进 integrations 的 vendor 目录（旧版本删掉，避免服务选错）
-cp workbuddy2api-X.Y.Z-py3-none-any.whl E:/router/integrations/qodbuddy2pi/assets/vendor/
-rm -f E:/router/integrations/qodbuddy2pi/assets/vendor/workbuddy2api-<旧版>.whl
+cp workbuddy2api-X.Y.Z-py3-none-any.whl integrations/qodbuddy2pi/assets/vendor/
+rm -f integrations/qodbuddy2pi/assets/vendor/workbuddy2api-<旧版>.whl
 
 # 2. 重启反代：router 每次启动都会重新扫描 integrations 里最新的 wheel
-node E:/router/router.mjs restart workbuddy workbuddy-global
+node router.mjs restart workbuddy workbuddy-global
 
 # 3. 验证「进程加载的是新版本」，而不是「磁盘上是新版本」
-node E:/router/router.mjs logs workbuddy 40
-node E:/router/scripts/health.mjs
+node router.mjs logs workbuddy 40
+node scripts/health.mjs
 ```
 
 > 旧流程里的 `workbuddy2pi install-service` 会生成一个 `.cmd` 计划任务。router 直管后
@@ -1062,9 +1066,9 @@ node E:/router/scripts/health.mjs
 router 默认**不注册任何开机自启**。要它随登录启动只能显式装：
 
 ```bash
-node E:/router/router.mjs service install [id...]     # 生成 router-<id> 计划任务
-node E:/router/router.mjs service                      # 看有没有注册（未注册=不会开机启动）
-node E:/router/router.mjs service uninstall [id...]    # 停止并移除
+node router.mjs service install [id...]     # 生成 router-<id> 计划任务
+node router.mjs service                      # 看有没有注册（未注册=不会开机启动）
+node router.mjs service uninstall [id...]    # 停止并移除
 ```
 
 三个容易混淆的入口，别混用：
@@ -1085,8 +1089,8 @@ node E:/router/router.mjs service uninstall [id...]    # 停止并移除
 先让 router 按端口收尸：
 
 ```bash
-node E:/router/router.mjs down workbuddy-global
-node E:/router/router.mjs up workbuddy-global
+node router.mjs down workbuddy-global
+node router.mjs up workbuddy-global
 ```
 
 还不行再手工：
@@ -1108,8 +1112,8 @@ Windows 上 `schtasks /End` **只结束 cmd.exe 包装进程**，`node`/`python`
 | Qoder 续期失败（refresh 无效） | `qoder2pi login <region> pt-xxx` 或重跑浏览器授权 |
 | WorkBuddy access 快到期 | `workbuddy2pi account renew` |
 | WorkBuddy 整个失效 | `workbuddy2pi account add` 重新登录 |
-| Trae 失效 | `node E:/router/router.mjs login trae-local`（浏览器登录） |
-| CodeArts 失效 | `node E:/router/router.mjs login codearts`（浏览器 OAuth），或确保 IDE 登录态有效 |
+| Trae 失效 | `node router.mjs login trae-local`（浏览器登录） |
+| CodeArts 失效 | `node router.mjs login codearts`（浏览器 OAuth），或确保 IDE 登录态有效 |
 
 ## 日志在哪
 
@@ -1119,18 +1123,18 @@ Windows 上 `schtasks /End` **只结束 cmd.exe 包装进程**，`node`/`python`
 | WorkBuddy 反代 | `~/.workbuddy2api/proxy.log`、`global/proxy.log` |
 | WorkBuddy 结构化 | `~/.workbuddy2api/codebuddy-proxy.jsonl` |
 | WorkBuddy 启动输出 | `~/.workbuddy2api/proxy-stdout.log`、`global/proxy-stdout.log` |
-| Trae | `E:\router\integrations\traework2api\{tw2api,img-proxy}.log` 与 `.err.log` |
-| CodeArts | `E:\router\integrations\codearts2api\run.log` |
+| Trae | `integrations\traework2api\{tw2api,img-proxy}.log` 与 `.err.log` |
+| CodeArts | `integrations\codearts2api\run.log` |
 | Qoder 授权流程 | `~/.qoder2pi/login/qoder-global.log` |
 
-统一入口：`node E:/router/router.mjs logs <id> [行数]`。
+统一入口：`node router.mjs logs <id> [行数]`。
 
 ## 配置文件位置
 
 | 文件 | 内容 |
 |---|---|
 | `~/.pi/agent/auth.json` | Qoder 凭证（pi 与 opencode 共用） |
-| `~/.pi/agent/models.json` | pi 的 provider 与模型：本机九家 + `router-gateway` + 免费供应商（`scripts/pi-models.mjs`，或 `gateway install` / `providers install` / `router pi sync` 同步写入） |
+| `~/.pi/agent/models.json` | pi 的 provider 与模型：本机十三家 + `router-gateway` + 免费供应商（`scripts/pi-models.mjs`，或 `gateway install` / `providers install` / `router pi sync` 同步写入） |
 | `~/.pi/agent/models.backups/` | 上面每次改写前的备份 |
 | `~/.pi/agent/extensions/qodbuddy2pi/` | 积分/签到扩展：`index.ts`（`/credits`、`credits` 工具、状态栏）与 `quota.js`（取数层） |
 | `~/.pi/agent/extensions/token-limits/` | 上下文/输出限额扩展（`/limits`、自动压缩、输出兜底）；默认 300k / 32k |
@@ -1144,9 +1148,13 @@ Windows 上 `schtasks /End` **只结束 cmd.exe 包装进程**，`node`/`python`
 | `~/.local/share/opencode/opencode.db` 的 `kv` 表 | opencode 运行时状态，含 `token-limits/overrides`（`/limits` 的覆盖值） |
 | `~/.qoder2pi/config.json` | 扩展副本路径 |
 | `~/.codebuddy-session.json` / `-global` | WorkBuddy 生效凭证 |
-| `E:\router\router.json` | 用户开关（enabled） |
-| `E:\router\.run\processes.json` | router 拉起的 PID / 端口 / 日志 |
-| `E:\router\integrations\codearts2api\codearts2api-data.json` | CodeArts 状态文件（不入库） |
+| `<repo>\router.json` | 用户开关（enabled） |
+| `<repo>\.run\processes.json` | router 拉起的 PID / 端口 / 日志 |
+| `integrations\codearts2api\codearts2api-data.json` | CodeArts 状态文件（不入库） |
 
 > ⚠️ 动 opencode 配置前先确认 provider 在哪个文件里：
 > `grep -l <provider> ~/.config/opencode/*.json*`
+
+---
+
+← [文档索引](README.md) ｜ 上一篇：[新供应商接入排查清单](04-checklist.md) ｜ 下一篇：[怎么把这套经验套到新供应商](06-reuse.md)
