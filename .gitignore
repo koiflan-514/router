@@ -8,6 +8,8 @@
 
 # 双系统共享账号库（含凭证，绝不入库）
 /.shared-home/
+# opencode 本机会话 / 团队运行态（含上下文，不入库）
+/.opencode/superagent-team/state.json
 
 # 统一网关的密钥库、用量与配置（密钥只存 SHA-256，但仍是机密）
 /gateway/data/

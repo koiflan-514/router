@@ -1118,7 +1118,9 @@ async function lobsterClaim() {
  * 的条目会显示成「拿不到 + 原因」，这比静默省略有用得多。
  */
 async function collectAll({ only = null } = {}) {
-  const wanted = (id) => (only ? only.includes(id) : true);
+  // Trae 在 pi 里叫 trae-local，取数层沿用短名；两种写法都接受，
+  // 否则从 pi 侧传 `provider: "trae-local"` 会得到一张空表。
+  const wanted = (id) => (only ? only.includes(id) || (id === 'trae' && only.includes('trae-local')) : true);
   const tasks = [];
   for (const provider of Object.keys(QODER_REGIONS)) {
     if (wanted(provider)) tasks.push(qoderQuota(provider));
@@ -1171,6 +1173,41 @@ function summarize(rows) {
     }
   }
   return { available, remaining, unit, claimable };
+}
+
+/**
+ * 取某个模型的倍率。provider 用 pi / opencode 里的 id（如 trae-local），
+ * 取数层的 row.provider 有的会短一截（Trae 是 `trae`），这里统一别名。
+ */
+const PROVIDER_ALIASES = {
+  'trae-local': 'trae',
+};
+
+function rowForProvider(rows, provider) {
+  const id = PROVIDER_ALIASES[provider] || provider;
+  return (rows || []).find((r) => r.provider === id) || null;
+}
+
+function multiplierFor(rows, provider, modelId) {
+  if (!modelId) return null;
+  const row = rowForProvider(rows, provider);
+  const table = row && row.multipliers;
+  if (!table || typeof table !== 'object') return null;
+  const hit = table[modelId];
+  return hit ? { modelId, ...hit } : null;
+}
+
+/** 倍率的一行文本：折后价在前，原价与限时说明在后。 */
+function fmtMultiplier(m) {
+  if (!m) return '';
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v).toFixed(2) : '浮动');
+  const effective = m.effective == null ? '浮动' : `x${num(m.effective)}`;
+  const base =
+    m.base != null && m.effective != null && Number(m.base) !== Number(m.effective)
+      ? ` (原 x${num(m.base)})`
+      : '';
+  const labels = Array.isArray(m.labels) && m.labels.length ? ` · ${m.labels.join('、')}` : '';
+  return `${effective}${base}${labels}`;
 }
 
 /**
@@ -1341,6 +1378,7 @@ function renderText(rows, { width = 60 } = {}) {
     }
     if (row.kind === 'workbuddy') {
       const cred = (row.buckets || []).find((x) => x.id === 'credential');
+      const refresh = (row.buckets || []).find((x) => x.id === 'refresh');
       const svc = row.serviceRunning ? '服务在线' : '服务未运行';
       const bits = [];
       if (row.account) bits.push(String(row.account));
@@ -1410,6 +1448,8 @@ module.exports = {
   summarize,
   renderText,
   fmtNum,
+  multiplierFor,
+  fmtMultiplier,
   // 工具（测试用）
   readJson,
   toMillis,

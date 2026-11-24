@@ -32,7 +32,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 /**
- * 三档预设。数值是「一个人正常用」的量级，不是上游的硬上限。
+ * 四档预设。数值是「一个人正常用」的量级，不是上游的硬上限。
  *
  * 为什么 rpm 给得比「每 2 秒一个」宽：agent 循环里每一步之间只隔几百毫秒
  * （模型回完就立刻发下一个工具调用），一轮复杂任务 30~50 步很常见。
@@ -42,15 +42,20 @@ const path = require('node:path');
  *   safe      极脆的上游：并发 1（上游按串行计量），连发就排队
  *   balanced  一般订阅：并发 2，仍留出「人和界面交互」的节奏
  *   fast      已确认宽松的上游：并发 4，适合并行工具调用
+ *   max       最宽档：并发 64、600/分钟、无最小间隔；配合 limits.json 的
+ *             `overrideHardCaps: true` 才能突破下面的 HARD_CAPS
  */
 const PRESETS = {
   safe: { concurrency: 1, rpm: 20, minIntervalMs: 3000, burst: 1, dailyCap: 0 },
   balanced: { concurrency: 2, rpm: 40, minIntervalMs: 1500, burst: 2, dailyCap: 0 },
   fast: { concurrency: 4, rpm: 90, minIntervalMs: 700, burst: 4, dailyCap: 0 },
+  max: { concurrency: 64, rpm: 600, minIntervalMs: 0, burst: 64, dailyCap: 0 },
 };
 
 /**
- * 各家的硬约束：来自上游文档或实测，**任何档位都不能突破**。
+ * 各家的硬约束：来自上游文档或实测，**默认任何档位都不能突破**。
+ * 只有 `limits.json` 里显式写 `"overrideHardCaps": true` 才会放开——
+ * 那是「我知道会撞上游 429/风控，但就是要最宽」的选择。
  *
  *   zcode      zcode-bridge 的计划通道按串行计量（`ZCODE_LANE_WIDTH=1`），
  *              并发 2 会拿到 3009「model concurrency」
@@ -122,6 +127,8 @@ function loadLimits(file = LIMITS_FILE) {
   return {
     file,
     tier: PRESETS[tier] ? tier : 'balanced',
+    // 最宽配置的显式开关：默认仍按 HARD_CAPS 封顶，避免误配把上游打成风控。
+    overrideHardCaps: raw.overrideHardCaps === true,
     providers: raw.providers && typeof raw.providers === 'object' ? raw.providers : {},
     free: raw.free && typeof raw.free === 'object' ? { ...DEFAULT_FREE_LIMITS, ...raw.free } : DEFAULT_FREE_LIMITS,
   };
@@ -142,7 +149,8 @@ function num(value, fallback) {
  * 解析出某家最终生效的限额：默认档 → 档位预设 → 该家覆盖 → 硬约束封顶。
  *
  * 顺序很重要：**硬约束最后生效**，否则用户写 `zcode: {concurrency: 8}` 会把
- * 一个必然 3009 的配置当成「用户自己的选择」放过。
+ * 一个必然 3009 的配置当成「用户自己的选择」放过。只有显式打开
+ * `overrideHardCaps` 才跳过这一步（最宽配置）。
  *
  * 「免费供应商」（云端 API-Key 直连）走 `cfg.free`：它们不在 `DEFAULT_TIER` 里，
  * 也没有硬约束，但同样不该被并发刷——免费额度的风控往往比订阅更敏感。
@@ -160,7 +168,7 @@ function resolveLimits(id, cfg = loadLimits()) {
     burst: num(own.burst, preset.burst),
     dailyCap: num(own.dailyCap, preset.dailyCap),
   };
-  const cap = HARD_CAPS[id];
+  const cap = cfg.overrideHardCaps ? null : HARD_CAPS[id];
   if (cap) {
     for (const [k, v] of Object.entries(cap)) out[k] = Math.min(out[k], v);
   }
@@ -465,6 +473,7 @@ function describeLimits(ids, { cfg = loadLimits() } = {}) {
     id,
     ...resolveLimits(id, cfg),
     file: cfg.file,
+    hardCapsOverridden: cfg.overrideHardCaps === true,
     tierSource: cfg.providers[id] && cfg.providers[id].tier
       ? 'override'
       : DEFAULT_TIER[id]

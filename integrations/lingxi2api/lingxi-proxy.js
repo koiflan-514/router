@@ -41,6 +41,17 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 
+// 本地限流：直连 :8796 也必须限，不能只靠网关。
+let createLimiterFor = null;
+let LimiterBusy = null;
+try {
+  ({ createLimiterFor, LimiterBusy } = require(path.join(__dirname, '..', 'limits', 'limiter.js')));
+} catch {}
+const LIMITER =
+  createLimiterFor && String(process.env.LINGXI_LIMITS || '').toLowerCase() !== 'off'
+    ? createLimiterFor('lingxi')
+    : null;
+
 const WIN = process.platform === 'win32';
 const HOME = os.homedir();
 const STARTED_AT = Date.now();
@@ -1027,6 +1038,7 @@ async function handleHealth(res) {
     modelError: modelError || undefined,
     appData: APP_DATA,
     chatAvailable: true,
+    limits: LIMITER ? LIMITER.snapshot() : null,
     endpoints: ['/health', '/v1/models', '/v1/chat/completions', '/v1/quota', '/v1/credits', '/v1/usage'],
     uptimeSeconds: Math.round((Date.now() - STARTED_AT) / 1000),
   });
@@ -1063,7 +1075,29 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {
       const body = await readBody(req);
-      return await handleChat(req, res, url, body);
+      let release = null;
+      if (LIMITER) {
+        try {
+          release = await LIMITER.acquire({ maxWaitMs: 5000 });
+        } catch (err) {
+          if (err instanceof LimiterBusy) {
+            const seconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+            res.setHeader('Retry-After', String(seconds));
+            return sendError(
+              res,
+              429,
+              `本地限流：${seconds} 秒后重试（${LIMITER.limits.rpm}/分钟，并发 ${LIMITER.limits.concurrency}）`,
+              'lingxi_rate_limited',
+            );
+          }
+          throw err;
+        }
+      }
+      try {
+        return await handleChat(req, res, url, body);
+      } finally {
+        if (release) release();
+      }
     }
     if (url.pathname === '/v1/quota' || url.pathname === '/v1/credits' || url.pathname === '/admin/api/credits') {
       if (req.method !== 'GET') return sendError(res, 405, '只支持 GET');

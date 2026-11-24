@@ -38,7 +38,7 @@
 
 实现见 `integrations/limits/limiter.js`（零依赖，纯内存）。
 
-## 三档预设
+## 四档预设
 
 数值是「一个人正常用」的量级，**不是上游的硬上限**：
 
@@ -47,15 +47,27 @@
 | `safe` | 1 | 20 | 3000ms | 1 | 上游按串行计量 / 免费账号 |
 | `balanced` | 2 | 40 | 1500ms | 2 | 一般订阅 |
 | `fast` | 4 | 90 | 700ms | 4 | 已确认宽松的上游 |
+| `max` | 64 | 600 | 0ms | 64 | 明确要最宽；配合 `overrideHardCaps` 才突破硬约束 |
 
 > **rpm 为什么给到 20/40 而不是更低**：agent 循环里每一步只隔几百毫秒（模型回完
 > 就发下一个工具调用），一轮复杂任务 30~50 步很常见。把 rpm 压到 12 会把**正常
 > 使用**误伤成 429。真正的套流特征是**并发**与**无间隔连发**，所以那两项收紧，
 > rpm 放宽到能容纳一次完整任务。
 
-## 硬约束不可覆盖
+### 最宽配置
 
-`HARD_CAPS` 里的值在**所有档位之后**生效，用户配置也压不过：
+本仓库当前的 `limits.json` 就是最宽配置：全局 `tier: "max"`、每家 `tier: "max"`，
+并显式写 `"overrideHardCaps": true`。生效值是 64 路并发 / 600 rpm / 无最小间隔 /
+突发 64，且不再按下面的 `HARD_CAPS` 封顶。
+
+代价是上游重新变成唯一的风控方：Qoder 的 `10605 isQueued`、ZCode 的 `3009`、
+CodeArts 的 `TM.00001041` 都会比默认档更容易出现。自用且额度充足时没问题；
+要恢复保守值，把 `overrideHardCaps` 改成 `false`，再把 `tier` 调回 `fast` / `balanced`。
+
+## 硬约束默认不可覆盖
+
+`HARD_CAPS` 里的值在**所有档位之后**生效，普通配置压不过；只有 `limits.json`
+显式写 `"overrideHardCaps": true` 才会跳过这一步（即上面的「最宽配置」）：
 
 ```js
 const HARD_CAPS = {
@@ -101,16 +113,18 @@ Qoder 国内/国际版的免费账号由**上游按并发排队**：并发超过
 
 ```json
 {
-  "tier": "balanced",
+  "tier": "max",
+  "overrideHardCaps": true,
   "providers": {
-    "zcode": { "tier": "safe" },
-    "raccoon": { "tier": "balanced" }
+    "zcode": { "tier": "max" },
+    "raccoon": { "tier": "max" }
   },
-  "free": { "concurrency": 2, "rpm": 30, "minIntervalMs": 1200, "burst": 2, "dailyCap": 0 }
+  "free": { "concurrency": 64, "rpm": 600, "minIntervalMs": 0, "burst": 64, "dailyCap": 0 }
 }
 ```
 
 - `tier` 全局默认档；`providers.<id>` 按家覆盖
+- `overrideHardCaps: true` 跳过 `HARD_CAPS` 封顶（最宽配置；默认 `false`）
 - `free` 是**免费供应商**（云端 API-Key 直连）的限额——它们的免费额度风控
   往往比订阅更敏感
 - 单项也能覆盖：`{ "raccoon": { "rpm": 6 } }` 只改速率，其余继承档位
@@ -186,7 +200,7 @@ Retry-After: 1
 | 客户端频繁 429，但上游额度充足 | `node router.mjs limits` + `node router.mjs gateway status` 的速率列 |
 | `gateway status` 里速率列带 `*` | 那家此刻被本地限流挡住（`limit.throttled`） |
 | 想确认限流真生效 | 并发打 6 个请求，看是否分批完成而不是 6 路齐发 |
-| 觉得限得太死 | 先 `limits <id> fast` 试，仍 429 再调 `rpm`；别直接删配置 |
+| 觉得限得太死 | 先 `limits <id> max` 试；要连上游硬约束一起放开就设 `overrideHardCaps: true`（最宽配置）；别直接删配置 |
 | 想临时关掉（调试） | 反代支持 `RACCOON_LIMITS=off` / `LOOMY_LIMITS=off`，**别长期关** |
 
 ## 和「上游 429 冷却」的区别

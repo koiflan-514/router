@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { REPO_ROOT } from './config.mjs';
 import { FREE_PROVIDERS } from './free-providers.mjs';
+import { inferReasoning } from '../scripts/lib/model-caps.mjs';
 
 const FREE_PROVIDER_IDS = FREE_PROVIDERS.map((p) => p.id);
 
@@ -166,7 +167,7 @@ function normalizeModels(json) {
         // 能力位也往下带：pi 靠它决定要不要给 thinking 档位、能不能贴图。
         // 网关自己不用这两项，但 /v1/models 与 pi 的 provider 需要。
         vision: caps.vision === true || declaredInput.includes('image'),
-        reasoning: caps.reasoning === true,
+        reasoning: caps.reasoning === true || inferReasoning(id),
       };
     })
     .filter(Boolean);
@@ -242,7 +243,7 @@ const WORKBUDDY_STATIC = {
 function staticCatalog(id) {
   const rows = WORKBUDDY_STATIC[id];
   if (!rows) return null;
-  return rows.map(([modelId, context]) => ({ id: modelId, name: modelId, context }));
+  return rows.map(([modelId, context]) => ({ id: modelId, name: modelId, context, reasoning: inferReasoning(modelId) }));
 }
 
 function latestCatalogFile(dirs) {
@@ -286,6 +287,7 @@ export function workbuddyCatalogModels(id) {
       id: m.id,
       name: m.name && String(m.name).trim() ? String(m.name).trim() : m.id,
       context: m.maxInputTokens || null,
+      reasoning: inferReasoning(m.id),
     }));
   if (!models.length) return null;
   // 补充项（auto）放在最前，顺序稳定

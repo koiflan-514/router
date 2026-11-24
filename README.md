@@ -59,7 +59,7 @@ WPS 灵犀也在网关里，但它不吐 tool_calls——编码 agent 的降级�
 | [docs/05-operations.md](docs/05-operations.md) | 日常运维：启停、换账号、看日志、升级 |
 | [docs/11-gateway.md](docs/11-gateway.md) | **统一网关运维：启停、端口交叉校验、额度快照、排查顺序、与 OpenResolver 对照** |
 | [docs/12-gateway-tuning.md](docs/12-gateway-tuning.md) | **网关调优：降级链怎么配、本地应答怎么关、失败分类怎么读** |
-| [docs/13-limits.md](docs/13-limits.md) | **本机限流：为什么限、四个维度、三档预设、硬约束、三层生效范围** |
+| [docs/13-limits.md](docs/13-limits.md) | **本机限流：为什么限、四个维度、四档预设、硬约束、三层生效范围** |
 | [docs/06-reuse.md](docs/06-reuse.md) | 怎么把这套经验套到新的供应商上 |
 | [scripts/health.mjs](scripts/health.mjs) | 一键体检：端口、模型数、凭证有效期、端到端试打 |
 | [scripts/pi-models.mjs](scripts/pi-models.mjs) | **把全部上游写进 pi 的 `models.json`：本机十三家 + `router-gateway` + 免费供应商（写前备份）** |
@@ -84,7 +84,7 @@ node router.mjs account check             # 只列出需要重登 / 快过期 / 
 node router.mjs account merge codearts    # 合并同一账号的重复记录（重登会新增记录）
 node router.mjs claim zcode               # 领取 ZCode 限时套餐（周末/夜间 Token 包）
 node router.mjs limits                    # 看本机限额（并发/速率），防止上游判定套流
-node router.mjs limits raccoon safe       # 改某家档位（safe/balanced/fast）
+node router.mjs limits raccoon max        # 改某家档位（safe/balanced/fast/max）
 node router.mjs limits --apply            # 把限额下发给自带限流器的反代（CodeArts）
 node router.mjs service claim install     # 定时领取：每 2 小时自动跑一次
 node router.mjs account workbuddy b       # 切到 WorkBuddy 的 slot b（自动重启）
@@ -101,9 +101,12 @@ node router.mjs up dumate        # 启动百度搭子反代（:8795）
 node router.mjs up lingxi        # 启动 WPS 灵犀反代（:8796，对话 + 智点余额）
 curl -s http://127.0.0.1:8796/v1/quota    # 查灵犀智点余额
 node router.mjs up lobster       # 启动有道龙虾反代（:8797，对话 + 积分/签到）
-curl -s http://127.0.0.1:8797/v1/quota    # 查龙虾积分包、签到状态与倍率node router.mjs sync             # 让 opencode 的 provider 与开关一致
-node router.mjs models           # 按上游 /v1/models 刷新 opencode 的模型清单
-node scripts/pi-models.mjs       # 让 pi 的 models.json 跟上：十三家反代 + router-gateway + 免费供应商
+curl -s http://127.0.0.1:8797/v1/quota    # 查龙虾积分包、签到状态与倍率
+node router.mjs sync             # 让 opencode 与 pi 的 provider 跟开关一致（--no-pi 只同步 opencode）
+node router.mjs models           # 按上游 /v1/models 刷新 opencode 与 pi 的模型清单
+node router.mjs pi               # 看 pi 的 provider 与扩展状态
+node router.mjs pi sync          # 刷新 pi 模型表，并部署积分/签到扩展
+node scripts/pi-models.mjs       # 只刷新 pi 的 models.json：十三家反代 + router-gateway + 免费供应商
 node scripts/pi-models.mjs gateway   # 只写统一网关（一个 baseURL，模型名带供应商前缀）
 node scripts/pi-models.mjs free      # 只写免费供应商（有 key / 本机免账号的那些）
 node router.mjs up               # 按当前开关启动全部反代
@@ -195,8 +198,9 @@ node router.mjs models              # 全部已开启的；也可指定 id：mod
 
 它按各家来源走对应路径（都会先备份 `opencode.json`）：Qoder/Trae/CodeArts/ZCode/Loomy
 直接拉 `/v1/models`；WorkBuddy 交给 `workbuddy2pi opencode install`，因为它的模型表只能
-来自 pi 扩展。注意 `node router.mjs sync` **不会**刷新模型——它只在 provider 不存在时写入，
-已存在就跳过（这正是 ZCode 长期只显示 1 个模型的原因）。
+来自 pi 扩展。注意 `node router.mjs sync` 只补「开关里有、客户端里没有」的 provider，
+**不会**刷新已存在的模型清单——上游增删模型要跑 `node router.mjs models`。默认两边一起
+刷新；`--no-pi` 只动 opencode。
 
 `/v1/models` 需要桌面端登录态的那些家（Loomy、小浣熊、灵犀、龙虾）在未登录时回 401，
 这时 `sync` 会退到 pi 模型表里的快照写 provider，选择器里至少不是空的；登录后再跑
@@ -238,7 +242,7 @@ node router.mjs sync-homes --homes "C:\Users\Administrator;D:\Users\demo"   # �
 - **Qoder**：每个区域只有一条凭证；首次同步固定为当时账号，之后同一 `userID` 自动
   续期。明确重新登录会更新共享账号，另一套系统里的旧备份不会把账号换回去。
 - **opencode / pi models / Qoder 模型缓存**：以最新修改的一份为准，写回所有 home。
-- **opencode 插件**（`~/.config/opencode/plugins/provider-credits`）：代码不做 mtime
+- **opencode 插件**（`~/.config/opencode/plugins/{provider-credits,token-limits}`）：代码不做 mtime
   合并。首次在某台机器上跑同步时从共享库装一份；已有就**不覆盖**，避免把正在改的版本
   冲掉。要升级就手工替换那一份（或在改动后删掉它让同步重装）。
 - 所有被覆盖的文件都会留 `.bak-sync-<时间>` 备份。
@@ -358,9 +362,9 @@ node router.mjs login workbuddy --force   # 强制重新登录
 |---|---|---|
 | `qoder` / `qoder-cn` | 扩展 `pi-provider-qoder`（私有协议直连，不经反代） | `pi install integrations/qodbuddy2pi/assets/vendor/pi-provider-qoder` |
 | `workbuddy` / `workbuddy-global` | 扩展 `~/.pi/agent/extensions/workbuddy.ts`（读桌面端产品配置） | 拷过去 + `node integrations/qodbuddy2pi/assets/workbuddy2pi ensure-auth-key` |
-| `trae-local` / `codearts` / `zcode` / `loomy` / `raccoon` / `qwenwork` / `dumate` / `lingxi` / `lobster` | `~/.pi/agent/models.json` | `node scripts/pi-models.mjs [id] [--dry-run]` |
-| `router-gateway` | 统一网关的 pi provider（模型名 `<供应商>/<模型>` + combo） | `node scripts/pi-models.mjs gateway` 或 `node router.mjs gateway install` |
-| 免费供应商（18 家中有 key / 本机免账号的） | 每家一个直连 provider，与 opencode 同口径 | `node scripts/pi-models.mjs free` 或 `node router.mjs providers install` |
+| `trae-local` / `codearts` / `zcode` / `loomy` / `raccoon` / `qwenwork` / `dumate` / `lingxi` / `lobster` | `~/.pi/agent/models.json` | `node router.mjs pi sync` 或 `node scripts/pi-models.mjs [id] [--dry-run]` |
+| `router-gateway` | 统一网关的 pi provider（模型名 `<供应商>/<模型>` + combo） | `node router.mjs pi sync gateway` 或 `node router.mjs gateway install` |
+| 免费供应商（18 家中有 key / 本机免账号的） | 每家一个直连 provider，与 opencode 同口径 | `node router.mjs pi sync free` 或 `node router.mjs providers install` |
 
 `pi-models.mjs` 从各家 `/v1/models` 拉清单、带上 `apiKey`（Trae 取
 `integrations/traework2api/.env.local`，CodeArts 取它自己签发的 `sk-ca-...`，
@@ -368,6 +372,12 @@ ZCode / Loomy / 小浣熊 / 有道龙虾用占位 key——本机回环不校验
 原样保留，写前备份到 `~/.pi/agent/models.backups/`。Qoder 与 WorkBuddy 会被它
 主动跳过并说明原因。`router gateway install` 与 `providers install` 走同一份
 写入实现（`scripts/lib/pi-sync.mjs`），所以两条路不会互相覆盖。
+
+`node router.mjs pi` 把上面这些收成一张状态表：哪些 provider 走扩展、哪些在
+`models.json`、各有几个模型、积分扩展装没装。`node router.mjs pi sync` 刷新模型表
+并部署扩展；`node router.mjs pi install --force` 只重装扩展。`router sync` / `pi sync`
+全量跑时还会把开关已关掉的本地 provider 从 pi 的模型表里移除，避免选择器里留着
+点了就报连不上的条目。
 
 ### 在 opencode 里看积分
 
@@ -377,6 +387,90 @@ ZCode / Loomy / 小浣熊 / 有道龙虾用占位 key——本机回环不校验
 官方只读接口，不保存新凭据、不签到（除非显式 `checkin:true`）。覆盖十三家里能查余额
 的每一家：Trae、CodeArts、WorkBuddy 国内/国际、Qoder 国内/国际、Loomy、小浣熊、
 千问办公、百度搭子、WPS 灵犀、有道龙虾、ZCode。拿不到的来源会写明原因，不用估算值冒充。
+
+### 上下文与输出限额
+
+两套客户端都默认把**所有模型**限制在 **300k 上下文 / 32k 输出**，并按同一阈值自动压缩：
+`context - max(16k, 15% × context)`，300k 时就是 **255k**。
+
+opencode 侧由 `~/.config/opencode/plugins/token-limits/` 提供，不用改 `opencode.json`：
+
+```text
+/limits                 # 滑块面板；或 Ctrl+Alt+L
+/limits 300k 32k        # 当前模型
+/limits provider 300k   # 当前供应商的所有模型
+/limits all 300k 32k    # 全部模型
+/limits reset           # 清除覆盖
+```
+
+覆盖值存在 OpenCode 的插件 storage 里，重启仍在；`opencode.json` 的 `limit` 保持原样。
+插件按**生效后**的上下文自动压缩，到达阈值时排队走 OpenCode 原生的 `session.compact`；
+调低限额后，已经超限的会话也会立刻排队压缩。`~/.config/opencode/cli.json` 里的
+`"plugins": ["*", "-opencode.sidebar.context"]` 关掉内置 Context 卡片，由插件接管，
+这样侧栏会显示 `limit` 与 `auto compact at` 的真实生效值。
+
+pi 侧由 `~/.pi/agent/extensions/token-limits/` 提供（`node router.mjs pi install --limits`
+部署），命令同名：
+
+```text
+/limits                       # 当前模型生效值与压缩阈值
+/limits 200k 16k              # 当前模型
+/limits provider 300k 32k     # 当前供应商
+/limits all 300k 32k          # 默认值（所有模型，含以后新增的）
+/limits reset                 # 当前模型回默认
+/limits reset all             # 清空所有单项覆盖
+```
+
+默认值存在 `~/.pi/agent/token-limits.json`。`scripts/lib/pi-sync.mjs` 写 `models.json`
+时会给每个模型补上 `contextWindow: 300000` / `maxTokens: 32000`，扩展再在
+`before_provider_request` 里兜底输出上限，并在 `turn_end` 检查上下文调用 pi 原生的
+`ctx.compact()`。扩展直连的 Qoder / WorkBuddy 模型由 `models.json` 的 `modelOverrides`
+套同一组限额，所以 `pi --list-models` 里也是 300K / 32K。
+
+Trae / CodeArts / ZCode / 百度搭子这些反代的 `/v1/models` 不报
+`capabilities.reasoning`，pi 会因此只给 `off` 一个思考档。`scripts/lib/model-caps.mjs`
+按模型族补 `reasoning: true`（DeepSeek V3/V4、GLM 4.5+、Kimi K2/K3、Qwen 3.5+、
+豆包 Seed 2、MiniMax M2/M3、GPT-5/6 等），写 `models.json` 和网关目录时都会走这一层。
+
+### 在 pi 里看积分
+
+`node router.mjs pi sync` 会把积分/签到扩展装到
+`~/.pi/agent/extensions/qodbuddy2pi/`（`index.ts` + `quota.js`）。装完后：
+
+```text
+/credits              # 一张表：十三家的余额、签到状态、当前模型倍率
+/credits checkin      # 顺手把能签的都签了
+/credits lobster      # 只看某个来源
+```
+
+也可以直接问模型（它有一个 `credits` 工具，参数 `provider` / `model` / `action`）：
+
+> 我还剩多少积分？今天签到领了吗？这个模型多少倍率？
+
+TUI 状态栏只显示**当前正在用的那一家**的余额，并在有公开倍率时带上当前模型的倍率
+（例如 `Lobster 684.88 · x0.05`），不会把四五家堆在一行。数据层 `quota.js` 与
+`qoder2pi credits` 共用：只读本机反代与 pi 自己的凭证，不伪造设备身份、不改登录态；
+签到只在 `/credits checkin` 或工具 `action: "checkin"` 时真的发请求。拿不到的来源
+会显示原因（未登录 / 服务没起 / 反代 401），而不是静默省略。
+
+## 隐私与安全
+
+本仓库只放代码、文档与可复现的配置样例，**不含任何真实凭证**：
+
+- 账号池、cookie、token、`state.vscdb` 解密结果、网关密钥库与用量都落在
+  `.gitignore` 覆盖的目录（`.shared-home/`、`gateway/data/`、`**/auths/`、
+  `**/data/`、`.env*`、`*.log` 等），不入库。
+- 文档与示例里的账号名、UID、AccessKey 前缀、Windows 用户名与机器名已脱敏为
+  `demo` / `DEMO-PC`；示例积分与倍率只用于说明格式，不是真实账号快照。
+- 日志、运行时 PID、opencode 会话状态和上游二进制
+  （`tw2api.exe`、`codearts2api.exe`、`zcode-bridge.exe`）不入库；第三方来源、
+  快照 commit、许可证与分发限制见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+- 提交前自检：`git status --short`、`git diff --cached --stat`，确认没有
+  `.env`、日志、凭证文件或真实账号信息。
+
+**声明**：本项目用于个人学习与自有账号的本地路由，不提供、不分发任何上游服务
+或账号。使用前请阅读各供应商的服务条款；因使用本工具导致的账号限制、额度损失
+或服务中断，由使用者自行承担。
 
 ## Git
 

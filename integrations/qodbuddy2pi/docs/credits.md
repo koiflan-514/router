@@ -3,14 +3,14 @@
 在 pi 里一眼看到各家 AI 编程工具还剩多少额度、今天签到了没有。
 
 ```text
-/credits              # 一张表：Qoder / Trae / WorkBuddy
+/credits              # 一张表：Qoder / Trae / WorkBuddy / CodeArts / …
 /credits checkin      # 顺手把能签的都签了
 /credits trae         # 只看某个来源
 ```
 
-也可以直接问模型（它有一个 `credits` 工具）：
+也可以直接问模型（它有一个 `credits` 工具，可带 provider / model / action）：
 
-> 我还剩多少积分？今天签到领了吗？
+> 我还剩多少积分？今天签到领了吗？这个模型多少倍率？
 
 ## 装了什么
 
@@ -21,6 +21,14 @@
 
 安装器会把两者一起部署（`pi` 只认目录里的 `index.ts` 作入口，所以 `credits.ts`
 装成 `index.ts`；扩展用 `createRequire` 加载同目录的 `quota.js`）。
+
+用 router 仓库时也可以不跑安装器，直接：
+
+```bash
+node router.mjs pi install          # 首次部署；--force 覆盖已有文件
+node router.mjs pi sync             # 刷新 pi 模型表并补齐扩展
+node router.mjs pi status           # 看扩展与 provider 是否齐全
+```
 
 命令行也能用同一份数据：
 
@@ -58,6 +66,7 @@ pi 的 TUI 里，状态栏**只显示你当前正在用的那一家**：
 CodeArts Agent 6599.09        ← 当前模型是 codearts/* 时
 Trae 652                      ← 当前模型是 trae-local/* 时
 Qoder 国内版 0                 ← 当前模型是 qoder-cn/* 时
+Lobster 684.88 · x0.05        ← 当前模型有公开倍率时一起显示
 ```
 
 为什么不是把所有家都堆上去：状态栏只有一行，而你此刻在用的只有一个。堆四五个数字

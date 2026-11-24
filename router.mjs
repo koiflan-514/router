@@ -34,6 +34,7 @@
  *   node router.mjs all / none           全开 / 全关
  *   node router.mjs reload               改完选择后重放一次（down + up）
  *   node router.mjs service ...          登录自启（Windows 计划任务）
+ *   node router.mjs pi [sync|install]       pi 的模型表与积分/签到扩展
  *   node router.mjs sync-homes [--status] 双系统账号/配置同步
  *   node router.mjs doctor               自检
  */
@@ -109,7 +110,13 @@ const GATEWAY_DIR = path.join(HERE, 'gateway');
 const GATEWAY_PORT = Number(process.env.ROUTER_GATEWAY_PORT || 8785);
 
 // 登录态的文件位置。只读/只写这些文件，不通过日志或表格输出 token。
-const PI_AUTH_FILE = path.join(HOME, '.pi', 'agent', 'auth.json');
+const PI_AGENT_DIR = path.join(HOME, '.pi', 'agent');
+const PI_AUTH_FILE = path.join(PI_AGENT_DIR, 'auth.json');
+const PI_MODELS_FILE = path.join(PI_AGENT_DIR, 'models.json');
+const PI_EXTENSIONS_DIR = path.join(PI_AGENT_DIR, 'extensions');
+const PI_CREDITS_DIR = path.join(PI_EXTENSIONS_DIR, 'qodbuddy2pi');
+const PI_LIMITS_DIR = path.join(PI_EXTENSIONS_DIR, 'token-limits');
+const PI_MODELS_SCRIPT = path.join(HERE, 'scripts', 'pi-models.mjs');
 const CODEARTS_DATA_FILE = path.join(CODEARTS_DIR, 'codearts2api-data.json');
 const WORKBUDDY_LIVE_FILES = {
   workbuddy: path.join(HOME, '.codebuddy-session.json'),
@@ -2671,6 +2678,29 @@ function workbuddyArgs(region, port) {
   return args;
 }
 
+/** 第三方反代直连时的透明限流层；真实进程挪到内部端口，对外端口不变。 */
+function limitProxySpec(provider, port, upstreamPort, log) {
+  return {
+    name: 'limit-proxy',
+    port,
+    command: () => process.execPath,
+    args: () => [
+      path.join(HERE, 'integrations', 'limits', 'limit-proxy.js'),
+      '--provider',
+      provider,
+      '--listen',
+      String(port),
+      '--upstream',
+      String(upstreamPort),
+    ],
+    cwd: () => HERE,
+    env: () => ({}),
+    log: () => log,
+    errLog: () => log,
+    waitMs: 15000,
+  };
+}
+
 // ---------------------------------------------------------------- 供应商表
 //
 // 每个供应商说清四件事：怎么探活、怎么启停、日志在哪、怎么在 opencode 里增删。
@@ -2828,16 +2858,17 @@ const PROVIDERS = [
     processes: [
       {
         name: 'zcode-bridge',
-        port: 20131,
+        port: 20132,
         command: () => resolveExecutable(ZCODE_DIR, ['zcode-bridge.exe', 'zcode-bridge']),
         args: () => [],
         cwd: () => ZCODE_DIR,
         // 账号文件固定在仓库内，避免 cwd 不同导致读到另一份
-        env: () => ({ ZCODE_ACCOUNTS_FILE }),
+        env: () => ({ ZCODE_ACCOUNTS_FILE, PORT: '20132', ZCODE_LANE_WIDTH: '1' }),
         log: () => path.join(ZCODE_DIR, 'run.log'),
         errLog: () => path.join(ZCODE_DIR, 'run.log'),
         waitMs: 20000,
       },
+      limitProxySpec('zcode', 20131, 20132, path.join(RUN_DIR, 'zcode-limit.log')),
     ],
     logs: [path.join(ZCODE_DIR, 'run.log')],
     ocProvider: 'zcode',
@@ -3051,9 +3082,9 @@ const PROVIDERS = [
     processes: [
       {
         name: 'codebuddy_proxy',
-        port: 8787,
+        port: 18787,
         command: () => findUv(),
-        args: () => workbuddyArgs('domestic', 8787),
+        args: () => workbuddyArgs('domestic', 18787),
         cwd: () => path.join(HOME, '.workbuddy2api'),
         env: () => ({ PYTHONUTF8: '1' }),
         log: () => path.join(HOME, '.workbuddy2api', 'proxy-stdout.log'),
@@ -3061,6 +3092,7 @@ const PROVIDERS = [
         ensureDirs: [path.join(HOME, '.workbuddy2api')],
         waitMs: 60000,
       },
+      limitProxySpec('workbuddy', 8787, 18787, path.join(RUN_DIR, 'workbuddy-limit.log')),
     ],
     logs: [
       path.join(HOME, '.workbuddy2api', 'proxy.log'),
@@ -3082,9 +3114,9 @@ const PROVIDERS = [
     processes: [
       {
         name: 'codebuddy_proxy',
-        port: 8788,
+        port: 18788,
         command: () => findUv(),
-        args: () => workbuddyArgs('global', 8788),
+        args: () => workbuddyArgs('global', 18788),
         cwd: () => path.join(HOME, '.workbuddy2api', 'global'),
         env: () => ({ PYTHONUTF8: '1' }),
         log: () => path.join(HOME, '.workbuddy2api', 'global', 'proxy-stdout.log'),
@@ -3092,6 +3124,7 @@ const PROVIDERS = [
         ensureDirs: [path.join(HOME, '.workbuddy2api', 'global')],
         waitMs: 60000,
       },
+      limitProxySpec('workbuddy-global', 8788, 18788, path.join(RUN_DIR, 'workbuddy-global-limit.log')),
     ],
     logs: [
       path.join(HOME, '.workbuddy2api', 'global', 'proxy.log'),
@@ -5405,7 +5438,7 @@ async function cmdLogin(rawArgs) {
 //
 //   node router.mjs limits                 看全部
 //   node router.mjs limits raccoon         看一家
-//   node router.mjs limits raccoon safe    改档位（写 limits.json）
+//   node router.mjs limits raccoon max     改档位（写 limits.json）
 //   node router.mjs limits raccoon rpm 6   改单项
 //   node router.mjs limits --check         体检：有没有被硬约束压掉的配置
 
@@ -5556,23 +5589,29 @@ async function cmdLimits(raw, { json = false } = {}) {
       `  免费供应商（云端 key）：并发 ${free.concurrency}、${free.rpm}/分钟、间隔 ${free.minIntervalMs}ms${free.dailyCap ? `、每日 ${free.dailyCap}` : ''}`,
     ),
   );
+  if (cfg.overrideHardCaps) {
+    say(`  ${C.warn} 已放开上游硬约束（overrideHardCaps: true）——最宽配置，可能触发上游 429/风控${C.reset}`);
+  }
   say('');
-  say(dim('  改档位：node router.mjs limits raccoon safe     改单项：node router.mjs limits raccoon rpm 6'));
+  say(dim('  改档位：node router.mjs limits raccoon max     改单项：node router.mjs limits raccoon rpm 6'));
   say(dim('  这些限额是「一个人正常用」的量级，不是上游硬上限；硬约束见 integrations/limits/limiter.js'));
 
   if (checkOnly) {
     const problems = [];
     for (const row of rows) {
       const cap = mod.HARD_CAPS[row.id];
-      if (cap && cap.concurrency && row.concurrency > cap.concurrency) {
+      if (!cfg.overrideHardCaps && cap && cap.concurrency && row.concurrency > cap.concurrency) {
         problems.push(`${row.id} 并发 ${row.concurrency} 超过硬约束 ${cap.concurrency}`);
       }
       if (row.rpm > 600) problems.push(`${row.id} 每分钟 ${row.rpm} 次，接近「机器刷量」的形态`);
-      if (row.minIntervalMs === 0 && row.burst > 4) {
+      if (row.tier !== 'max' && row.minIntervalMs === 0 && row.burst > 4) {
         problems.push(`${row.id} 无最小间隔且突发 ${row.burst}，容易被判并发异常`);
       }
     }
     say('');
+    if (cfg.overrideHardCaps) {
+      warn('overrideHardCaps 已开启：上游硬约束不再封顶（最宽配置，注意上游 429/风控）');
+    }
     if (problems.length) {
       for (const msg of problems) warn(msg);
       return 1;
@@ -5863,6 +5902,242 @@ async function cmdService(args) {
 
   usage();
   bad(`未知 service 子命令：${action}`);
+  return 1;
+}
+
+// ---------------------------------------------------------------- Pi 侧配置
+
+/** pi 侧由扩展直连的 provider：写进 models.json 反而会抢 OAuth / 静态表不真实。 */
+const PI_EXTENSION_PROVIDERS = {
+  'qoder-cn': 'pi-provider-qoder',
+  qoder: 'pi-provider-qoder',
+  workbuddy: 'workbuddy.ts',
+  'workbuddy-global': 'workbuddy.ts',
+};
+
+/** models.json 里由 `scripts/pi-models.mjs` 维护的 provider。 */
+const PI_MODELS_PROVIDERS = [
+  'trae-local',
+  'codearts',
+  'zcode',
+  'loomy',
+  'raccoon',
+  'qwenwork',
+  'dumate',
+  'lingxi',
+  'lobster',
+  'router-gateway',
+];
+
+function piModelCount(provider) {
+  return provider && Array.isArray(provider.models) ? provider.models.length : 0;
+}
+
+function settingsHasPackage(name) {
+  try {
+    const settings = readJsonFile(path.join(PI_AGENT_DIR, 'settings.json')) || {};
+    return (settings.packages || []).some((p) => String(p).includes(name));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 部署 pi 的积分/签到扩展。
+ *
+ * 扩展源与 qodbuddy2pi 安装器用同一份 `assets/`：pi 只认目录里的 `index.ts` 作入口，
+ * `quota.js` 必须与它同目录（扩展通过 createRequire 加载）。
+ *
+ * 默认不覆盖已存在的文件——用户可能正在改；`pi install --force` 才刷新。
+ */
+function installPiExtensions({ force = false, only = null } = {}) {
+  const srcDir = path.join(QODBUDDY_REPO, 'assets');
+  const jobs = [
+    { key: 'credits', src: path.join(srcDir, 'credits.ts'), dest: path.join(PI_CREDITS_DIR, 'index.ts'), label: '积分/签到扩展（/credits）' },
+    { key: 'quota', src: path.join(srcDir, 'quota.js'), dest: path.join(PI_CREDITS_DIR, 'quota.js'), label: '积分取数层（quota.js）' },
+    { key: 'limits', src: path.join(INTEGRATIONS_DIR, 'token-limits2pi', 'index.ts'), dest: path.join(PI_LIMITS_DIR, 'index.ts'), label: '上下文/输出限额扩展（/limits）' },
+    { key: 'workbuddy', src: path.join(srcDir, 'workbuddy.ts'), dest: path.join(PI_EXTENSIONS_DIR, 'workbuddy.ts'), label: 'WorkBuddy provider 扩展' },
+  ].filter((job) => !only || only.includes(job.key));
+  const rows = [];
+  for (const job of jobs) {
+    if (!fs.existsSync(job.src)) {
+      rows.push({ ...job, ok: false, reason: `缺少 ${job.src}` });
+      continue;
+    }
+    const exists = fs.existsSync(job.dest);
+    if (exists && !force) {
+      const same = fs.readFileSync(job.src, 'utf8') === fs.readFileSync(job.dest, 'utf8');
+      rows.push({ ...job, ok: true, installed: false, reason: same ? '已是最新' : '已存在（--force 覆盖）' });
+      continue;
+    }
+    try {
+      fs.mkdirSync(path.dirname(job.dest), { recursive: true });
+      fs.copyFileSync(job.src, job.dest);
+      rows.push({ ...job, ok: true, installed: true, reason: exists ? '已覆盖' : '已安装' });
+    } catch (e) {
+      rows.push({ ...job, ok: false, reason: e.message });
+    }
+  }
+  return rows;
+}
+
+function runPiModels(args = [], { dryRun = false } = {}) {
+  if (!fs.existsSync(PI_MODELS_SCRIPT)) {
+    bad(`找不到 ${PI_MODELS_SCRIPT}`);
+    return 1;
+  }
+  const argv = [...args];
+  if (dryRun && !argv.includes('--dry-run')) argv.push('--dry-run');
+  const r = spawnSync(process.execPath, [PI_MODELS_SCRIPT, ...argv], {
+    cwd: HERE,
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+  return typeof r.status === 'number' ? r.status : 1;
+}
+
+/**
+ * 把开关已经关掉的本地 provider 从 pi 的 models.json 里移除。
+ *
+ * `scripts/pi-models.mjs` 只增改、不删；不补这一步，`router off zcode` 之后 pi 的
+ * 选择器里仍留着 zcode，选中才报连不上。网关是叠加层，不跟开关走。
+ */
+async function prunePiProviders(enabled) {
+  const stale = PI_MODELS_PROVIDERS.filter((id) => id !== 'router-gateway' && !enabled.includes(id));
+  if (!stale.length) return [];
+  try {
+    const pisync = await import(new URL('./scripts/lib/pi-sync.mjs', import.meta.url).href);
+    const r = pisync.removePiProviders(stale);
+    if (r.removed.length) {
+      say(dim(`已从 pi 移除关闭的 provider：${r.removed.join('、')}`));
+      if (r.backup) say(dim(`  备份：${r.backup}`));
+    }
+    return r.removed;
+  } catch {
+    return [];
+  }
+}
+
+function printPiStatus() {
+  const cfg = readJsonFile(PI_MODELS_FILE) || { providers: {} };
+  const providers = cfg.providers && typeof cfg.providers === 'object' ? cfg.providers : {};
+  say(`${C.bold}pi 配置${C.reset}  ${dim(PI_MODELS_FILE)}`);
+  say('─'.repeat(78));
+  say(`  ${padEnd('供应商', 18)} ${padEnd('来源', 12)} ${padEnd('模型', 8)} 状态`);
+
+  const rows = [];
+  for (const id of Object.keys(PI_EXTENSION_PROVIDERS)) {
+    const ext = PI_EXTENSION_PROVIDERS[id];
+    const okExt =
+      ext === 'pi-provider-qoder'
+        ? settingsHasPackage('pi-provider-qoder')
+        : fs.existsSync(path.join(PI_EXTENSIONS_DIR, ext));
+    rows.push({ id, source: '扩展', models: '—', note: okExt ? `${C.ok}${ext}${C.reset}` : `${C.bad}缺少 ${ext}${C.reset}` });
+  }
+  for (const id of PI_MODELS_PROVIDERS) {
+    const p = providers[id];
+    rows.push({
+      id,
+      source: 'models.json',
+      models: p ? String(piModelCount(p)) : '0',
+      note: p ? `${C.ok}已写入${C.reset}` : `${C.dim}未写入${C.reset}`,
+    });
+  }
+  for (const row of rows) {
+    say(`  ${padEnd(row.id, 18)} ${padEnd(row.source, 12)} ${padEnd(row.models, 8)} ${row.note}`);
+  }
+
+  const others = Object.keys(providers).filter(
+    (id) => !PI_MODELS_PROVIDERS.includes(id) && !PI_EXTENSION_PROVIDERS[id],
+  );
+  say('─'.repeat(78));
+  if (others.length) say(`${C.dim}  其它 provider（原样保留）：${others.join('、')}${C.reset}`);
+
+  say('');
+  say(`${C.bold}扩展${C.reset}`);
+  const credits = path.join(PI_CREDITS_DIR, 'index.ts');
+  const quotaFile = path.join(PI_CREDITS_DIR, 'quota.js');
+  const wb = path.join(PI_EXTENSIONS_DIR, 'workbuddy.ts');
+  const mark = (ok) => (ok ? C.ok : C.bad);
+  say(`  ${mark(fs.existsSync(credits) && fs.existsSync(quotaFile))} 积分/签到 ${dim(PI_CREDITS_DIR)}（pi 里 /credits）`);
+  const limits = path.join(PI_LIMITS_DIR, 'index.ts');
+  say(`  ${mark(fs.existsSync(limits))} 上下文/输出限额 ${dim(PI_LIMITS_DIR)}（pi 里 /limits）`);
+  say(`  ${mark(fs.existsSync(wb))} WorkBuddy ${dim(wb)}`);
+  say(`  ${mark(settingsHasPackage('pi-provider-qoder'))} Qoder ${dim('pi-provider-qoder（settings.json packages）')}`);
+
+  const stale = PI_MODELS_PROVIDERS.filter((id) => !providers[id]);
+  if (stale.length) {
+    say('');
+    warn(`缺少 ${stale.length} 个 provider：${stale.join('、')}`);
+    say(`  ${dim('补齐：node router.mjs pi sync')}`);
+  }
+  return 0;
+}
+
+/**
+ * `router.pi ...`：pi 侧的配置入口。
+ *
+ * 模型表由 `scripts/pi-models.mjs` 写；扩展由本仓库的 qodbuddy2pi assets 部署。
+ * 这两件事以前分散在文档里，靠人记；现在收进同一个命令，`router sync` 也会顺手刷新。
+ */
+async function cmdPi(raw) {
+  const args = raw.filter((a) => !a.startsWith('--'));
+  const sub = (args[0] || 'status').toLowerCase();
+  const force = raw.includes('--force');
+  const dryRun = raw.includes('--dry-run');
+  const skipExt = raw.includes('--no-ext');
+  // `--credits` 只动积分扩展，不碰用户可能自己改过的 workbuddy.ts；
+  // `--limits` 只装 /limits 限额扩展。
+  const only = raw.includes('--credits') ? ['credits', 'quota'] : raw.includes('--limits') ? ['limits'] : null;
+
+  if (sub === 'status' || sub === 'list') return printPiStatus();
+
+  if (sub === 'install' || sub === 'ext') {
+    say(`${C.bold}安装 pi 扩展${C.reset}`);
+    const rows = installPiExtensions({ force, only });
+    for (const r of rows) {
+      const line = `${r.label}：${r.reason}`;
+      if (!r.ok) bad(line);
+      else if (r.installed) ok(line);
+      else say(dim(`· ${line}`));
+    }
+    if (!settingsHasPackage('pi-provider-qoder')) {
+      warn('Qoder provider 扩展还没装进 settings.json');
+      say(`  ${dim(`pi install ${path.join(QODBUDDY_REPO, 'assets', 'vendor', 'pi-provider-qoder')}`)}`);
+    }
+    return 0;
+  }
+
+  if (sub === 'sync' || sub === 'refresh') {
+    const wanted = args.slice(1);
+    const native = wanted.filter((id) => PI_EXTENSION_PROVIDERS[id]);
+    const modelsWanted = wanted.filter((id) => !PI_EXTENSION_PROVIDERS[id]);
+    if (native.length) {
+      say(`${C.dim}· ${native.join('、')} 由 pi 扩展直连，不写 models.json；确保扩展已安装即可${C.reset}`);
+    }
+    if (dryRun) {
+      say(dim('· --dry-run：不部署扩展，也不写 models.json'));
+    } else if (!skipExt) {
+      const rows = installPiExtensions({ force, only });
+      for (const r of rows) {
+        if (!r.ok) bad(`${r.label}：${r.reason}`);
+        else if (r.installed) ok(`${r.label} ${r.reason}`);
+      }
+    }
+    if (wanted.length && modelsWanted.length === 0) {
+      printPiStatus();
+      return 0;
+    }
+    const code = runPiModels(modelsWanted, { dryRun });
+    if (code !== 0) warn('pi 模型表没有全部刷新（看上面的跳过原因）');
+    // 全量 sync 才按开关清理；显式指定 id 时不擅自删别家。
+    if (!wanted.length && !dryRun) await prunePiProviders(currentEnabled());
+    if (!dryRun) printPiStatus();
+    return 0;
+  }
+
+  usage();
+  bad(`未知 pi 子命令：${sub}`);
   return 1;
 }
 
@@ -6161,6 +6436,24 @@ async function cmdDoctor() {
   if (fs.existsSync(oc)) say(`  ${C.ok} ${oc}`);
   else warn(`opencode 配置还不存在：${oc}`);
 
+  // pi 侧的三个落点：models.json（模型）、extensions（provider / 积分）、
+  // settings.json（npm 包形式的 Qoder provider）。缺哪一块都只影响 pi，不影响反代。
+  say('');
+  say(`${C.bold}pi 侧${C.reset}`);
+  const piCfg = readJsonFile(PI_MODELS_FILE);
+  const piProviders = piCfg && piCfg.providers && typeof piCfg.providers === 'object' ? piCfg.providers : {};
+  const piCount = Object.keys(piProviders).length;
+  if (fs.existsSync(PI_MODELS_FILE)) say(`  ${C.ok} ${PI_MODELS_FILE}（${piCount} 个 provider）`);
+  else warn(`pi 还没有模型表：${PI_MODELS_FILE}（node router.mjs pi sync）`);
+  const creditsExt = fs.existsSync(path.join(PI_CREDITS_DIR, 'index.ts')) && fs.existsSync(path.join(PI_CREDITS_DIR, 'quota.js'));
+  say(`  ${creditsExt ? C.ok : C.warn} 积分/签到扩展${creditsExt ? '' : '（node router.mjs pi install）'}`);
+  const limitsExt = fs.existsSync(path.join(PI_LIMITS_DIR, 'index.ts'));
+  say(`  ${limitsExt ? C.ok : C.warn} 上下文/输出限额扩展${limitsExt ? '' : '（node router.mjs pi install）'}`);
+  const wbExt = fs.existsSync(path.join(PI_EXTENSIONS_DIR, 'workbuddy.ts'));
+  say(`  ${wbExt ? C.ok : C.warn} WorkBuddy 扩展${wbExt ? '' : '（node router.mjs pi install）'}`);
+  const qoderExt = settingsHasPackage('pi-provider-qoder');
+  say(`  ${qoderExt ? C.ok : C.warn} Qoder provider${qoderExt ? '' : `（pi install ${path.join(QODBUDDY_REPO, 'assets', 'vendor', 'pi-provider-qoder')}）`}`);
+
   say('─'.repeat(92));
   if (issues === 0) say(`${C.ok} 自检通过`);
   else say(`${C.warn} ${issues} 项需要处理`);
@@ -6195,8 +6488,12 @@ function usage() {
   node router.mjs off <id...>            关掉这几家，其余保持
   node router.mjs all / none             全开 / 全关
   node router.mjs reload                 down + up（改完开关后重放）
-  node router.mjs sync                   只同步 opencode 配置
-  node router.mjs models [id...]         按上游 /v1/models 刷新 opencode 的模型清单
+  node router.mjs sync                   同步 opencode 与 pi 配置（--no-pi 只同步 opencode）
+  node router.mjs models [id...]         按上游 /v1/models 刷新 opencode 与 pi 的模型清单
+  node router.mjs pi                     看 pi 的 provider 与扩展状态
+  node router.mjs pi sync [id...]        刷新 pi 模型表并安装积分/限额扩展
+  node router.mjs pi install [--force]   只部署 pi 扩展（--credits 只装积分/签到，--limits 只装限额）
+  node router.mjs pi status              同 pi
   node router.mjs gateway up              启动统一网关（单端口 + 双协议 + 跨供应商转移）
   node router.mjs gateway status          网关调度快照：权重、冷却、并发、粘性
   node router.mjs gateway install         把网关写成 opencode + pi 的一个 provider
@@ -6210,7 +6507,7 @@ function usage() {
   node router.mjs providers test [id...]  探活：拉一次模型列表验证 key
   node router.mjs providers install       把可用的写成 opencode + pi provider
   node router.mjs limits                 看本机限额（并发/速率/每日上限）
-  node router.mjs limits raccoon safe    改档位（写 limits.json）
+  node router.mjs limits raccoon max     改档位（写 limits.json）
   node router.mjs limits raccoon rpm 6   改单项
   node router.mjs limits --check         体检限额配置
   node router.mjs limits --apply         把限额下发给自带限流器的反代（CodeArts）
@@ -6445,6 +6742,15 @@ async function main() {
   if (cmd === 'sync') {
     const changed = await doSyncOpenCode(currentEnabled());
     if (!changed) say(dim('opencode 配置已与当前开关一致，无需改动'));
+    // pi 侧同一份开关：opencode 与 pi 一起刷新，才不会一边有模型、一边还是旧快照。
+    // `--no-pi` 保留原来的「只同步 opencode」语义。
+    if (!raw.includes('--no-pi')) {
+      say('');
+      say(`${C.bold}pi 模型表${C.reset}  ${dim(PI_MODELS_FILE)}`);
+      const code = runPiModels([]);
+      if (code !== 0) warn('pi 模型表没有全部刷新（看上面的跳过原因）');
+      await prunePiProviders(currentEnabled());
+    }
     return 0;
   }
 
@@ -6470,10 +6776,18 @@ async function main() {
     }
     const failed = rows.filter((r) => !r.ok).length;
     if (failed) say(dim(`\n${failed} 家没刷新；其余已写入，原配置已备份`));
+    // pi 的模型表也一起拉，避免「opencode 刷新了、pi 还是旧目录」。
+    if (!raw.includes('--no-pi')) {
+      say('');
+      say(`${C.bold}pi 模型表${C.reset}  ${dim(PI_MODELS_FILE)}`);
+      const code = runPiModels([]);
+      if (code !== 0) warn('pi 模型表没有全部刷新（看上面的跳过原因）');
+    }
     return failed ? 1 : 0;
   }
 
   if (cmd === 'account' || cmd === 'accounts' || cmd === 'acct') return cmdAccount(raw, { json });
+  if (cmd === 'pi') return cmdPi(raw);
   if (cmd === 'gateway' || cmd === 'gw') return cmdGateway(raw);
   if (cmd === 'providers' || cmd === 'provider') return cmdProviders(raw);
   if (cmd === 'claim' || cmd === 'checkin') return cmdClaim(raw, { json });

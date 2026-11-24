@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inferReasoning, withReasoning } from './model-caps.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -32,6 +33,27 @@ export const GATEWAY_PROVIDER_ID = 'router-gateway';
 export const GATEWAY_PROVIDER_NAME = 'router 统一网关';
 /** 网关回环免密钥，但 pi / opencode 都强制带一个非空 apiKey。 */
 export const GATEWAY_API_KEY = 'router-local';
+
+/**
+ * pi 侧统一的上下文/输出限额：所有写入 models.json 的模型都套这一层。
+ * 与 opencode 的 token-limits 默认值一致，避免两边看到的限额不同。
+ */
+export const PI_MODEL_LIMITS = { context: 300_000, output: 32_000 };
+
+/** 把 provider 里的每个模型都写成统一限额，并补上缺失的 reasoning 能力位。 */
+export function applyPiModelLimits(provider) {
+  if (!provider || !Array.isArray(provider.models)) return provider;
+  return {
+    ...provider,
+    models: provider.models.map((model) =>
+      withReasoning({
+        ...model,
+        contextWindow: PI_MODEL_LIMITS.context,
+        maxTokens: PI_MODEL_LIMITS.output,
+      }),
+    ),
+  };
+}
 
 export const gatewayBaseUrl = () =>
   `http://127.0.0.1:${Number(process.env.ROUTER_GATEWAY_PORT || 8785)}/v1`;
@@ -93,7 +115,7 @@ export function mergePiProviders(list, { dryRun = false } = {}) {
   const unchanged = [];
   for (const { id, ...provider } of list) {
     if (!id) continue;
-    const next = provider;
+    const next = applyPiModelLimits(provider);
     if (stable(cfg.providers[id]) === stable(next)) {
       unchanged.push(id);
       continue;
@@ -145,7 +167,7 @@ export function piModelEntry(raw, { name, context, vision, reasoning } = {}) {
   const entry = { id };
   const display = name || raw.name || raw.display_name;
   if (display && display !== id) entry.name = display;
-  if (caps.reasoning === true || reasoning === true) entry.reasoning = true;
+  if (caps.reasoning === true || reasoning === true || inferReasoning(id)) entry.reasoning = true;
   const ctx = positive(context ?? raw.context_length ?? raw.context_window ?? raw.limit?.context);
   if (ctx) entry.contextWindow = ctx;
   const out = positive(raw.max_output_tokens ?? raw.limit?.output);

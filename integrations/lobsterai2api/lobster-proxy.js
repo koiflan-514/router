@@ -47,6 +47,17 @@ const path = require('node:path');
 const { Readable } = require('node:stream');
 const { randomUUID } = require('node:crypto');
 
+// 本地限流：直连 :8797 也必须限，不能只靠网关。
+let createLimiterFor = null;
+let LimiterBusy = null;
+try {
+  ({ createLimiterFor, LimiterBusy } = require(path.join(__dirname, '..', 'limits', 'limiter.js')));
+} catch {}
+const LIMITER =
+  createLimiterFor && String(process.env.LOBSTER_LIMITS || '').toLowerCase() !== 'off'
+    ? createLimiterFor('lobster')
+    : null;
+
 let DatabaseSync = null;
 try {
   ({ DatabaseSync } = require('node:sqlite'));
@@ -959,6 +970,7 @@ const server = http.createServer(async (req, res) => {
             }
           : null,
         modelsCachedAt: catalogCache.data ? new Date(catalogCache.at).toISOString() : null,
+        limits: LIMITER ? LIMITER.snapshot() : null,
         sqlite: DatabaseSync ? 'node:sqlite' : 'unavailable',
         uptimeSeconds: Math.round((Date.now() - STARTED_AT) / 1000),
       });
@@ -985,7 +997,29 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname.startsWith('/v1/')) {
       const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req) : null;
-      return await handleChat(req, res, url, body);
+      let release = null;
+      if (LIMITER) {
+        try {
+          release = await LIMITER.acquire({ maxWaitMs: 5000 });
+        } catch (err) {
+          if (err instanceof LimiterBusy) {
+            const seconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+            res.setHeader('Retry-After', String(seconds));
+            return sendError(
+              res,
+              429,
+              `本地限流：${seconds} 秒后重试（${LIMITER.limits.rpm}/分钟，并发 ${LIMITER.limits.concurrency}）`,
+              'lobster_rate_limited',
+            );
+          }
+          throw err;
+        }
+      }
+      try {
+        return await handleChat(req, res, url, body);
+      } finally {
+        if (release) release();
+      }
     }
 
     sendError(res, 404, `未知端点：${url.pathname}`);

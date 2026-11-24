@@ -1,5 +1,5 @@
 const path = require('node:path');
-const L = require(path.join('D:', 'router', 'integrations', 'limits', 'limiter.js'));
+const L = require(path.join(__dirname, 'limiter.js'));
 const assert = require('node:assert/strict');
 
 let pass = 0;
@@ -39,6 +39,24 @@ t('硬约束封顶：zcode 并发写 8 也只能是 1', () => {
 t('硬约束封顶：codearts 最多 3', () => {
   const cfg = { file: 'x', tier: 'fast', providers: { codearts: { concurrency: 99 } }, free: L.DEFAULT_FREE_LIMITS };
   assert.equal(L.resolveLimits('codearts', cfg).concurrency, 3);
+});
+
+t('max 档是最宽预设', () => {
+  const f = L.PRESETS.fast, m = L.PRESETS.max;
+  assert.ok(m.concurrency >= f.concurrency);
+  assert.ok(m.rpm >= f.rpm);
+  assert.ok(m.minIntervalMs <= f.minIntervalMs);
+  assert.equal(m.minIntervalMs, 0);
+});
+
+t('max 档默认仍受硬约束封顶', () => {
+  const cfg = { file: 'x', tier: 'max', providers: { zcode: { tier: 'max' } }, free: L.DEFAULT_FREE_LIMITS };
+  assert.equal(L.resolveLimits('zcode', cfg).concurrency, 1);
+});
+
+t('overrideHardCaps 可放开硬约束', () => {
+  const cfg = { file: 'x', tier: 'max', overrideHardCaps: true, providers: { zcode: { tier: 'max' } }, free: L.DEFAULT_FREE_LIMITS };
+  assert.equal(L.resolveLimits('zcode', cfg).concurrency, L.PRESETS.max.concurrency);
 });
 
 t('未登记的上游（免费供应商）走 free 档', () => {

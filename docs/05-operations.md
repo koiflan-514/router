@@ -190,9 +190,30 @@ node E:/router/router.mjs models            # 也可只刷某几家：models zco
 按来源走的分支：Qoder / Trae / CodeArts / ZCode / Loomy 直接拉 `/v1/models`；
 WorkBuddy 走 `workbuddy2pi opencode install`（模型表只能来自 pi 扩展）。
 
-**`router.mjs sync` 不刷新模型**：它只在 provider 不存在时写入，已存在就跳过。
+**`router.mjs sync` 不刷新已有模型**：它只在 provider 不存在时写入，已存在就跳过。
 ZCode 的 opencode 侧长期只有 1 个模型、Qoder 国内版还留着上游已停用的模型，
-都是这个行为造成的。
+都是这个行为造成的。要刷新模型目录用 `router.mjs models`（opencode 与 pi 一起刷）。
+
+`sync` 现在会顺手把 pi 的模型表也补齐；`--no-pi` 保留原来只同步 opencode 的语义。
+pi 侧单独操作：
+
+```bash
+node E:/router/router.mjs pi            # provider、模型数、扩展状态
+node E:/router/router.mjs pi sync       # 刷新 pi 模型表 + 部署积分/限额扩展
+node E:/router/router.mjs pi install --force   # 只重装扩展
+node E:/router/router.mjs pi install --limits  # 只装 /limits 限额扩展
+```
+
+pi 侧所有模型默认 **300k 上下文 / 32k 输出**：`scripts/lib/pi-sync.mjs` 写
+`models.json` 时统一补 `contextWindow` / `maxTokens`（扩展直连的 Qoder、WorkBuddy
+模型走 `modelOverrides`），`token-limits` 扩展再负责 `/limits` 覆盖、输出上限兜底和
+`context - max(16k, 15%)` 的自动压缩。opencode 侧同一组默认值由
+`plugins/token-limits` 的 `token-limits/overrides` 保存。
+
+反代的 `/v1/models` 不报 `capabilities.reasoning` 时，`scripts/lib/model-caps.mjs`
+按模型族补 `reasoning: true`（DeepSeek V3/V4、GLM 4.5+、Kimi K2/K3、Qwen 3.5+、
+豆包 Seed 2、MiniMax M2/M3、GPT-5/6 等）；否则 pi 的 `/thinking` 只会显示 `off`。
+网关的 `/v1/models` 与 `models.json` 都走同一套推断。
 
 需要分来源手工刷新时：
 
@@ -611,6 +632,14 @@ qoder2pi opencode uninstall     # 兼容旧命令；日常用 router sync
 qoder2pi credits                # 余额与签到
 qoder2pi credits checkin
 ```
+
+pi 里同一份数据换成交互入口：`node router.mjs pi sync` 部署
+`~/.pi/agent/extensions/qodbuddy2pi/` 后，`/credits` 打表、`/credits checkin` 签到，
+状态栏显示当前 provider 的余额与当前模型倍率；模型也能通过 `credits` 工具查询。
+
+`/limits` 是另一个扩展（`~/.pi/agent/extensions/token-limits/`）：默认所有模型
+300k / 32k，`/limits 200k 16k` 改当前模型，`/limits provider` / `all` 批量改，
+阈值 255k 自动压缩。opencode 侧同名命令与默认值见根 README 的「上下文与输出限额」。
 
 国内版**不支持**设备授权（只支持 PAT）；国际版两者都支持。router 的 `login qoder`
 直接实现了国际版的 PKCE + deviceToken 轮询，成功后写回 `~/.pi/agent/auth.json`。
@@ -1101,12 +1130,18 @@ Windows 上 `schtasks /End` **只结束 cmd.exe 包装进程**，`node`/`python`
 | 文件 | 内容 |
 |---|---|
 | `~/.pi/agent/auth.json` | Qoder 凭证（pi 与 opencode 共用） |
-| `~/.pi/agent/models.json` | pi 的 provider 与模型：本机六家 + `router-gateway` + 免费供应商（`scripts/pi-models.mjs`，或 `gateway install` / `providers install` 同步写入） |
+| `~/.pi/agent/models.json` | pi 的 provider 与模型：本机九家 + `router-gateway` + 免费供应商（`scripts/pi-models.mjs`，或 `gateway install` / `providers install` / `router pi sync` 同步写入） |
 | `~/.pi/agent/models.backups/` | 上面每次改写前的备份 |
+| `~/.pi/agent/extensions/qodbuddy2pi/` | 积分/签到扩展：`index.ts`（`/credits`、`credits` 工具、状态栏）与 `quota.js`（取数层） |
+| `~/.pi/agent/extensions/token-limits/` | 上下文/输出限额扩展（`/limits`、自动压缩、输出兜底）；默认 300k / 32k |
+| `~/.pi/agent/token-limits.json` | `/limits` 的默认值与逐模型覆盖（`node router.mjs pi install --limits` 部署扩展） |
 | `~/.pi/agent/extensions/workbuddy.ts` | WorkBuddy 的 pi 扩展（模型表来自桌面端产品配置） |
 | `~/.pi/agent/auth.json` 的 `qoder` / `workbuddy*` | Qoder 的 OAuth 凭据、WorkBuddy 的占位 key |
 | `~/.config/opencode/opencode.json` | 本项目写的 provider |
 | `~/.config/opencode/opencode.jsonc` | Trae 的 provider（历史位置） |
+| `~/.config/opencode/cli.json` | opencode 客户端设置：`plugins` 名单、标签页、权限 |
+| `~/.config/opencode/plugins/{provider-credits,token-limits}/` | opencode 插件：积分看板、上下文/输出限额与自动压缩 |
+| `~/.local/share/opencode/opencode.db` 的 `kv` 表 | opencode 运行时状态，含 `token-limits/overrides`（`/limits` 的覆盖值） |
 | `~/.qoder2pi/config.json` | 扩展副本路径 |
 | `~/.codebuddy-session.json` / `-global` | WorkBuddy 生效凭证 |
 | `E:\router\router.json` | 用户开关（enabled） |

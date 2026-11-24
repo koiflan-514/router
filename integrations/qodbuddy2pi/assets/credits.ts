@@ -32,7 +32,16 @@ const quota = requireCjs(path.join(import.meta.dirname, "quota.js")) as {
   fmtNum(n: number | string): string;
   summarize(rows: QuotaRow[]): Summary;
   renderText(rows: QuotaRow[], opts?: { width?: number }): string;
+  multiplierFor(rows: QuotaRow[], provider: string, modelId: string): Multiplier | null;
+  fmtMultiplier(m: Multiplier | null): string;
   QODER_REGIONS: Record<string, { provider: string; title: string }>;
+};
+
+type Multiplier = {
+  modelId: string;
+  base?: number | null;
+  effective?: number | null;
+  labels?: string[];
 };
 
 type QuotaBucket = {
@@ -91,6 +100,8 @@ type QuotaRow = {
   buckets?: QuotaBucket[];
   accounts?: AccountRow[];
   checkin?: CheckinState | null;
+  multipliers?: Record<string, Omit<Multiplier, "modelId">> | null;
+  quotaExhausted?: boolean;
   baseUrl?: string;
   fetchedAt?: string;
   serviceRunning?: boolean;
@@ -163,7 +174,13 @@ async function claimAll(rows: QuotaRow[]): Promise<{ lines: string[]; anyClaimed
  *
  * providerId 来自 ctx.model.provider（pi 的当前模型），取不到时退回「第一个可用的」。
  */
-function statusLine(rows: QuotaRow[], providerId?: string): string {
+function multiplierLine(rows: QuotaRow[], providerId?: string, modelId?: string): string | null {
+  if (!providerId || !modelId) return null;
+  const m = quota.multiplierFor(rows, providerId, modelId);
+  return m ? quota.fmtMultiplier(m) : null;
+}
+
+function statusLine(rows: QuotaRow[], providerId?: string, modelId?: string): string {
   const usable = rows.filter((r) => r.available);
   if (usable.length === 0) return "积分不可用";
 
@@ -173,19 +190,34 @@ function statusLine(rows: QuotaRow[], providerId?: string): string {
 
   // 去掉括号里的补充说明（"Trae（免费积分）" → "Trae"），但保留词间空格
   const short = (t: string) => t.replace(/（.*?）/g, "").trim();
-  let remaining = 0;
-  if (row.kind === "trae" || row.kind === "codearts") {
-    remaining = (row.accounts || []).filter((a) => !a.error).reduce((a, b) => a + Number(b.remaining || 0), 0);
-  } else if (row.buckets) {
-    // 只加 credits 桶：WorkBuddy 的天数不能和积分混在一起
-    remaining = (row.buckets || []).filter((b) => b.unit === "credits").reduce((a, b) => a + Number(b.remaining || 0), 0);
+
+  // 余额：查不到就如实说「无余额信息」，不要拿 0 冒充。
+  let metric: string;
+  if (row.kind === "workbuddy") {
+    const cred = (row.buckets || []).find((b) => b.id === "credential");
+    metric = cred ? `凭证剩 ${cred.remaining} 天` : "无凭证";
+  } else {
+    let remaining: number | null = null;
+    if (row.kind === "trae" || row.kind === "codearts") {
+      remaining = (row.accounts || []).filter((a) => !a.error).reduce((a, b) => a + Number(b.remaining || 0), 0);
+    } else if (row.buckets) {
+      // 只加 credits 桶：WorkBuddy 的天数不能和积分混在一起
+      const credits = (row.buckets || []).filter((b) => b.unit === "credits");
+      if (credits.length > 0) remaining = credits.reduce((a, b) => a + Number(b.remaining || 0), 0);
+    }
+    // Qoder 免费号常见「额度 0 但仍可调用」：bucket 为空时用 quotaExhausted 兜底。
+    if (remaining === null && row.quotaExhausted) remaining = 0;
+    metric = remaining === null ? "无余额信息" : quota.fmtNum(remaining);
   }
 
-  const bits = [`${short(row.title)} ${quota.fmtNum(remaining)}`];
+  const bits = [`${short(row.title)} ${metric}`];
   // 顺带提一句「这家还能签到」，省得用户另外去翻
   if (row.checkin && row.checkin.supported && (row.checkin.claimable || row.checkin.supported && row.kind === "codearts")) {
     if (row.checkin.claimable) bits.push("可签到");
   }
+  // 当前模型有公开倍率时一起显示：余额和「这一次要花多少」是同一件事
+  const mult = multiplierLine(rows, providerId, modelId);
+  if (mult) bits.push(mult);
   return bits.join(" · ");
 }
 
@@ -194,7 +226,7 @@ const creditsTool = defineTool({
   name: "credits",
   label: "Credits",
   description:
-    "Query the user's remaining credits/quotas and daily check-in status for Qoder, Trae, WorkBuddy, CodeArts, ZCode, Loomy, Raccoon, QwenWork, DuMate and WPS Lingxi. " +
+    "Query the user's remaining credits/quotas and daily check-in status for Qoder, Trae, WorkBuddy, CodeArts, ZCode, Loomy, Raccoon, QwenWork, DuMate, WPS Lingxi and LobsterAI. " +
     "Reads only local state (pi credentials and locally running proxies); never modifies login files. " +
     "Use it when the user asks how many credits they have left or whether today's check-in is done.",
   parameters: Type.Object({
@@ -211,14 +243,23 @@ const creditsTool = defineTool({
         description: "Limit to one source: qoder-cn, qoder, trae, workbuddy, workbuddy-global, codearts, zcode, loomy, raccoon, qwenwork, dumate, lingxi, lobster.",
       }),
     ),
+    model: Type.Optional(
+      Type.Unsafe<string>({
+        type: "string",
+        description: "With provider, also report this model's credit multiplier (e.g. deepseek-flash).",
+      }),
+    ),
   }),
 
   async execute(_toolCallId, params) {
+    // trae-local 是 pi 的 provider id，取数层里叫 trae；multiplierFor 会自己转。
     const only = params.provider ? [params.provider] : null;
     const rows = await quota.collectAll({ only });
     const action = params.action === "checkin" ? "checkin" : "status";
 
     const parts: string[] = [quota.renderText(rows)];
+    const mult = multiplierLine(rows, params.provider, params.model);
+    if (mult) parts.push("", `当前模型倍率：${params.provider}/${params.model}  ${mult}`);
     if (action === "checkin") {
       const { lines } = await claimAll(rows);
       parts.push("", "签到结果", ...lines);
@@ -250,7 +291,11 @@ export default function creditsExtension(pi: ExtensionAPI) {
       ].includes(arg) ? [arg] : null;
 
       const rows = await quota.collectAll({ only });
-      const text = quota.renderText(rows);
+      const modelLine = multiplierLine(rows, ctx.model?.provider, ctx.model?.id);
+      const text = [
+        quota.renderText(rows),
+        modelLine ? `\n当前模型 ${ctx.model?.provider}/${ctx.model?.id}：${modelLine}` : "",
+      ].filter(Boolean).join("\n");
 
       if (!wantCheckin) {
         ctx.ui.notify(text, "info");
@@ -262,7 +307,7 @@ export default function creditsExtension(pi: ExtensionAPI) {
       // 领到了就顺手刷新一下状态栏上的数字
       if (ctx.mode === "tui") {
         const fresh = await quota.collectAll({ only });
-        ctx.ui.setStatus("credits", statusLine(fresh, ctx.model?.provider));
+        ctx.ui.setStatus("credits", statusLine(fresh, ctx.model?.provider, ctx.model?.id));
       }
     },
   });
@@ -284,14 +329,14 @@ export default function creditsExtension(pi: ExtensionAPI) {
    */
   let cached: { rows: QuotaRow[]; at: number } | null = null;
 
-  const refreshStatus = async (ctx: StatusCtx, providerId: string | undefined) => {
+  const refreshStatus = async (ctx: StatusCtx, providerId: string | undefined, modelId: string | undefined) => {
     const FRESH_MS = 5 * 60 * 1000;
     try {
       if (!cached || Date.now() - cached.at > FRESH_MS) {
         cached = { rows: await quota.collectAll(), at: Date.now() };
       }
       if (cached.rows.some((r) => r.available)) {
-        ctx.ui.setStatus("credits", statusLine(cached.rows, providerId));
+        ctx.ui.setStatus("credits", statusLine(cached.rows, providerId, modelId));
       }
     } catch {
       // 状态栏是锦上添花，失败就静默
@@ -300,12 +345,12 @@ export default function creditsExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     if (ctx.mode !== "tui") return;
-    await refreshStatus(ctx as unknown as StatusCtx, ctx.model?.provider);
+    await refreshStatus(ctx as unknown as StatusCtx, ctx.model?.provider, ctx.model?.id);
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     // 这里 model 一定已经定了，是「当前 provider」最可靠的取值点
-    await refreshStatus(ctx as unknown as StatusCtx, ctx.model?.provider);
+    await refreshStatus(ctx as unknown as StatusCtx, ctx.model?.provider, ctx.model?.id);
   });
 }

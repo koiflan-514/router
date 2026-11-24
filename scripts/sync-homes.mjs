@@ -598,7 +598,7 @@ function syncJsonc({ homesData, currentHome, warnings }) {
  * `loading plugin id=.../plugins/model-groups`），不需要往 opencode.jsonc 的
  * `plugins` 数组里登记，也就不必去改用户手写的带注释配置。
  */
-const PLUGIN_NAMES = ['provider-credits'];
+const PLUGIN_NAMES = ['provider-credits', 'token-limits'];
 
 function syncPlugins({ homesData }) {
   let installed = 0;

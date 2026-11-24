@@ -366,3 +366,59 @@ test('renderText: 龙虾已签到时不再说可领', () => {
   assert.match(text, /签到：今日已签到/);
   assert.doesNotMatch(text, /今日可领/);
 });
+
+// ---------------------------------------------------------------- WorkBuddy
+
+const workbuddyRow = () => ({
+  provider: 'workbuddy',
+  title: 'WorkBuddy 国内版',
+  available: true,
+  kind: 'workbuddy',
+  account: 'tester',
+  serviceRunning: true,
+  buckets: [
+    { id: 'credential', label: '凭证有效期', remaining: 12, total: null, used: null, unit: '天' },
+    { id: 'refresh', label: '续期有效期', remaining: 42, total: null, used: null, unit: '天' },
+  ],
+});
+
+test('renderText: WorkBuddy 同时显示凭证与续期剩余天数', () => {
+  const text = quota.renderText([workbuddyRow()]);
+  assert.match(text, /\[WorkBuddy 国内版\]/);
+  assert.match(text, /凭证剩 12 天/);
+  assert.match(text, /续期剩 42 天/);
+  assert.match(text, /服务在线/);
+});
+
+test('renderText: WorkBuddy 只有凭证时不会因为缺少续期桶而崩', () => {
+  const row = workbuddyRow();
+  row.buckets = [row.buckets[0]];
+  const text = quota.renderText([row]);
+  assert.match(text, /凭证剩 12 天/);
+  assert.doesNotMatch(text, /续期/);
+});
+
+// ---------------------------------------------------------------- 倍率
+
+test('multiplierFor: 认得 trae-local 与取数层 trae 的别名', () => {
+  const rows = [
+    {
+      provider: 'trae',
+      multipliers: { 'model-a': { base: 1, effective: 0.5, labels: ['限时折扣'] } },
+    },
+  ];
+  const m = quota.multiplierFor(rows, 'trae-local', 'model-a');
+  assert.deepStrictEqual(m, { modelId: 'model-a', base: 1, effective: 0.5, labels: ['限时折扣'] });
+  assert.strictEqual(quota.multiplierFor(rows, 'trae-local', 'model-b'), null);
+  assert.strictEqual(quota.multiplierFor(rows, 'codearts', 'model-a'), null);
+});
+
+test('fmtMultiplier: 折后价在前，原价与限时说明在后', () => {
+  assert.strictEqual(
+    quota.fmtMultiplier({ effective: 0.05, base: 0.1, labels: ['夜间折扣'] }),
+    'x0.05 (原 x0.10) · 夜间折扣',
+  );
+  assert.strictEqual(quota.fmtMultiplier({ effective: 0, base: 0, labels: [] }), 'x0.00');
+  assert.strictEqual(quota.fmtMultiplier({ effective: null, base: null }), '浮动');
+  assert.strictEqual(quota.fmtMultiplier(null), '');
+});

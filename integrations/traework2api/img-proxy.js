@@ -18,6 +18,17 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// 本地限流：img-proxy 是 Trae 对外的 :7863，直连也要限（tw2api 的 :7864 不对外）。
+let createLimiterFor = null;
+let LimiterBusy = null;
+try {
+  ({ createLimiterFor, LimiterBusy } = require(path.join(__dirname, '..', 'limits', 'limiter.js')));
+} catch {}
+const LIMITER =
+  createLimiterFor && String(process.env.TRAE_LIMITS || '').toLowerCase() !== 'off'
+    ? createLimiterFor('trae-local')
+    : null;
+
 const UPSTREAM = process.env.UPSTREAM || 'http://127.0.0.1:7864';
 const LISTEN = process.env.LISTEN || '127.0.0.1:7863';
 
@@ -173,6 +184,40 @@ const server = http.createServer(async (req, res) => {
           raw = JSON.stringify(body);
           console.log('[img-proxy] 图片已转文字，转发上游');
         }
+
+        // 本地限流：执行位占到响应结束（流可能持续几十秒）。
+        let release = null;
+        if (LIMITER) {
+          try {
+            release = await LIMITER.acquire({ maxWaitMs: 5000 });
+          } catch (err) {
+            if (err instanceof LimiterBusy) {
+              const seconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+              res.writeHead(429, {
+                'Content-Type': 'application/json',
+                'Retry-After': String(seconds),
+              });
+              res.end(JSON.stringify({
+                error: {
+                  message: `本地限流：${seconds} 秒后重试（${LIMITER.limits.rpm}/分钟，并发 ${LIMITER.limits.concurrency}）`,
+                  type: 'trae_rate_limited',
+                  code: 429,
+                },
+              }));
+              return;
+            }
+            throw err;
+          }
+        }
+        let released = false;
+        const releaseOnce = () => {
+          if (released) return;
+          released = true;
+          if (release) release();
+        };
+        res.on('finish', releaseOnce);
+        res.on('close', releaseOnce);
+
         proxyRequest(req.method, pathName, req.headers, raw, res);
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });

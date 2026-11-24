@@ -28,6 +28,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// 本地限流：与网关、其它反代共用 limits.json。直连 :8789 / :8790 也必须限，
+// 否则客户端绕过网关开子代理时，上游仍会看到多路并发（docs/13-limits.md）。
+let createLimiterFor = null;
+let LimiterBusy = null;
+try {
+  ({ createLimiterFor, LimiterBusy } = require(path.join(__dirname, '..', '..', 'limits', 'limiter.js')));
+} catch {}
+
 // ---------------------------------------------------------------- 区域
 
 /**
@@ -1527,6 +1535,10 @@ function createServer({ regionKey, verbose = false, logFile = null }) {
   if (!region) throw new Error(`未知区域：${regionKey}`);
   const credsStore = new CredentialStore(region);
   const catalog = new ModelCatalog(region, credsStore);
+  const LIMITER =
+    createLimiterFor && String(process.env.QODER_LIMITS || '').toLowerCase() !== 'off'
+      ? createLimiterFor(region.provider)
+      : null;
 
   const writeLog = (line) => {
     if (!logFile) return;
@@ -1548,7 +1560,13 @@ function createServer({ regionKey, verbose = false, logFile = null }) {
     try {
       // ---- 健康检查：插件与运维命令靠它判断服务在不在
       if (pathname === '/health' || pathname === '/v1/health') {
-        return json(res, 200, { status: 'ok', region: region.key, provider: region.provider, pid: process.pid });
+        return json(res, 200, {
+          status: 'ok',
+          region: region.key,
+          provider: region.provider,
+          pid: process.pid,
+          limits: LIMITER ? LIMITER.snapshot() : null,
+        });
       }
 
       // ---- 模型列表
@@ -1571,17 +1589,41 @@ function createServer({ regionKey, verbose = false, logFile = null }) {
         const model = catalog.find(body.model) || catalog.find('auto') || (catalog.models || [])[0];
         if (!model) return openAiError(res, 400, `未知模型：${body.model}`);
 
-        const creds = await credsStore.resolve();
-        const qoderBody = buildQoderRequest({ body, model, messages, tools: body.tools });
-
-        if (body.stream === false) {
-          const result = await collectChat({ region, creds, model, qoderBody });
-          writeLog(`POST chat model=${model.id} non-stream ${Date.now() - started}ms`);
-          return json(res, 200, result);
+        // 本地限流：执行位一直占到流结束（docs/02-pitfalls P31）。
+        let release = null;
+        if (LIMITER) {
+          try {
+            release = await LIMITER.acquire({ maxWaitMs: 5000 });
+          } catch (err) {
+            if (err instanceof LimiterBusy) {
+              const seconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+              return openAiError(
+                res,
+                429,
+                `本地限流：${seconds} 秒后重试（${LIMITER.limits.rpm}/分钟，并发 ${LIMITER.limits.concurrency}）`,
+                'qoder_rate_limited',
+                seconds,
+              );
+            }
+            throw err;
+          }
         }
-        await streamChat({ region, creds, model, qoderBody, res });
-        writeLog(`POST chat model=${model.id} stream ${Date.now() - started}ms`);
-        return;
+
+        try {
+          const creds = await credsStore.resolve();
+          const qoderBody = buildQoderRequest({ body, model, messages, tools: body.tools });
+
+          if (body.stream === false) {
+            const result = await collectChat({ region, creds, model, qoderBody });
+            writeLog(`POST chat model=${model.id} non-stream ${Date.now() - started}ms`);
+            return json(res, 200, result);
+          }
+          await streamChat({ region, creds, model, qoderBody, res });
+          writeLog(`POST chat model=${model.id} stream ${Date.now() - started}ms`);
+          return;
+        } finally {
+          if (release) release();
+        }
       }
 
       // ---- 兼容少数客户端会打的端点，至少别 404 得莫名其妙
