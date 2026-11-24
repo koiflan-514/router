@@ -48,6 +48,7 @@ WPS 灵犀也在网关里，但它不吐 tool_calls——编码 agent 的降级�
 | **[gateway/free-providers.mjs](gateway/free-providers.mjs)** | **18 家免费供应商：3 家本机免账号（Ollama/LM Studio/llama.cpp）+ 15 家有免费额度（需 key）** |
 | [integrations/](integrations/) | **整合进来的反代源码 + 本仓库自写的 Loomy / 小浣熊 / 千问办公 / 百度搭子 / WPS 灵犀代理 + 本地二进制/凭证说明** |
 | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | 第三方来源、commit、许可证与二进制分发限制 |
+| [LICENSE](LICENSE) | 本仓库自身代码的 MIT 许可证；第三方子目录保留各自许可 |
 | [docs/09-lifecycle.md](docs/09-lifecycle.md) | **反代进程生命周期：PID、日志、端口清理、登录自启** |
 | [docs/07-selective.md](docs/07-selective.md) | 选择性启停的原理与三个坑 |
 | [docs/08-codearts.md](docs/08-codearts.md) | CodeArts Agent（华为云）|
@@ -483,6 +484,19 @@ git diff --cached --stat
 ```
 
 `integrations/` 的来源、快照 commit 与许可证见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 许可
+
+本仓库**自身编写**的代码与文档以 [MIT License](LICENSE) 发布
+（Copyright © 2026 koiflan-514）。
+
+`integrations/` 下的第三方源码快照**保留各自原许可证**，不受根目录 MIT 覆盖：
+
+- `qodbuddy2pi`、`traework2api`、`zcode-bridge`：MIT
+- `codearts2api`：Apache-2.0（见 `integrations/codearts2api/LICENSE`）
+
+来源、快照 commit、二进制分发限制与 vendored 依赖许可见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 四条最贵的教训
