@@ -23,7 +23,7 @@ export default defineConfig({
   },
   webServer: {
     command: REAL
-      ? `node server/index.mjs --port ${PORT}`
+      ? `node server/index.mjs --read-only --port ${PORT}`
       : `node server/index.mjs --demo --port ${PORT}`,
     url: `${BASE}/api/health`,
     reuseExistingServer: true,

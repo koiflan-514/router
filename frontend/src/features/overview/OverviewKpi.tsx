@@ -1,37 +1,27 @@
-import { Link } from '@tanstack/react-router';
 import { Activity, CheckCheck, ShieldAlert, TriangleAlert } from 'lucide-react';
-import { Sparkline } from '@/components/shared/charts';
 import { MetricCard } from '@/components/shared/metric-card';
-import { DASH, fmtCompact, fmtInt } from '@/lib/format';
-import type { ProviderStatus, UsageStats } from '@/lib/contract';
+import { DASH, fmtInt } from '@/lib/format';
+import type { ProviderStatus } from '@/lib/contract';
 import type { QuotaPayload } from '@/lib/query';
-import {
-  activityTrend,
-  activityValues,
-  claimableCount,
-  deriveSummary,
-} from './overview-model';
+import { claimableCount, deriveSummary, quotaCoverageStats } from './overview-model';
 
 /**
  * 顶部四个 KPI 瓦片：运行/启用、漂移/异常、认证告警、额度可领取。
  *
- * 全部由 providers / quota 明细逐项推导；sparkline 只画 usage.activity 的真实点，
- * 不足 2 点时不画线（Sparkline 内部显示占位），绝不生成假曲线。
+ * 全部由 providers / quota 明细逐项推导。额度卡**不再借用** usage.activity 的
+ * steps 序列做 sparkline/trend（语义不同、也会让人误读为额度趋势）；它只展示
+ * 后端显式给出的可领取数，以及额度覆盖情况。
  */
 export function OverviewKpiTiles({
   providers,
   quota,
-  usage,
 }: {
   providers: ProviderStatus[];
   quota: QuotaPayload | null;
-  usage: UsageStats | null;
 }) {
   const s = deriveSummary(providers);
   const claimable = claimableCount(quota);
-  const series = activityValues(usage);
-  const trend = activityTrend(usage);
-  const hasActivity = series.filter((n) => Number.isFinite(n)).length >= 2;
+  const coverage = quotaCoverageStats(quota);
 
   return (
     <section aria-label="关键指标" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -68,62 +58,11 @@ export function OverviewKpiTiles({
       <MetricCard
         label="额度可领取"
         value={claimable > 0 ? fmtInt(claimable) : DASH}
-        sub={claimable > 0 ? '来自后端 checkin.claimable=true' : '暂无显式可领取来源'}
-        hint={
-          hasActivity
-            ? `近 7 天会话步骤趋势（首尾差 ${trend !== null && trend > 0 ? '+' : ''}${fmtCompact(trend)})`
-            : '近 7 天无 activity 序列，趋势位显示占位'
-        }
+        sub={coverage.sub}
+        hint="可领取来自后端 checkin；不推断历史趋势"
         tone={claimable > 0 ? 'info' : 'default'}
         accessory={<CheckCheck aria-hidden />}
-        spark={hasActivity ? series : undefined}
-        trend={
-          hasActivity && trend !== null
-            ? { value: trend, label: '首尾差（steps）', intent: 'neutral' }
-            : undefined
-        }
-        sparkLabel="近 7 天会话步骤"
       />
     </section>
-  );
-}
-
-/**
- * 近 7 天用量区块（页面上半部分）：数据来源说明 + 一条较大的 sparkline。
- * 与 /usage 同源（OpenCode 会话统计 7d）；无数据时明确显示空状态。
- */
-export function Usage7dPanel({ usage }: { usage: UsageStats | null }) {
-  const series = activityValues(usage);
-  const has = series.filter((n) => Number.isFinite(n)).length >= 2;
-  const total = series.reduce((a, b) => a + b, 0);
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className="font-display text-ramp-20 font-semibold tabular-nums">{fmtInt(total)}</span>
-        <span className="text-[11px] text-text-secondary">steps · 近 7 天累计</span>
-        <Link
-          to="/usage"
-          search={{ range: '7d' }}
-          className="ml-auto rounded text-[11px] text-accent-rest underline-offset-4 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          在用量页查看详情
-        </Link>
-      </div>
-      {has ? (
-        <Sparkline
-          data={series}
-          width={360}
-          height={56}
-          className="w-full"
-          label="近 7 天会话步骤趋势"
-          description={`共 ${series.length} 天，合计 ${total} steps，峰值 ${Math.max(...series)}`}
-          dot
-        />
-      ) : (
-        <div className="flex h-14 items-center rounded-md border border-dashed border-stroke-2 bg-surface-2/40 px-3 text-[11px] text-text-tertiary">
-          近 7 天没有 activity 序列（接口返回为空），不绘制趋势线。
-        </div>
-      )}
-    </div>
   );
 }

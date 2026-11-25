@@ -362,7 +362,7 @@ export function ReportsPage() {
           {allLoading ? (
             <p className="text-xs text-muted-foreground">等待数据源返回后生成结论…</p>
           ) : (
-            <ul className="flex flex-col gap-1.5 text-xs">
+            <ul className="grid gap-x-6 gap-y-1.5 text-xs xl:grid-cols-2">
               {report.conclusions.map((conclusion, i) => (
                 <li key={`${conclusion.text}-${i}`} className="flex items-start gap-2">
                   <ConclusionIcon tone={conclusion.tone} />
@@ -396,8 +396,15 @@ export function ReportsPage() {
         <MetricCard
           label="会话 / 步骤"
           value={
-            <span className="tabular-nums">
-              {usageReady ? fmtInt(usage.sessions) : DASH} / {usageReady ? fmtInt(usage.steps) : DASH}
+            // 单个大字号里塞「19 / 17,402」会在六列窄卡里把斜杠折到下一行；
+            // 改成「会话 19 · 步骤 17,402」的小字号单行（数值与口径不变），整行 nowrap。
+            <span className="flex flex-col gap-0.5">
+              <span className="whitespace-nowrap text-ramp-12 font-medium text-text-secondary">
+                会话 <span className="font-semibold text-text-primary">{usageReady ? fmtInt(usage.sessions) : DASH}</span>
+              </span>
+              <span className="whitespace-nowrap text-ramp-12 font-medium text-text-secondary">
+                步骤 <span className="font-semibold text-text-primary">{usageReady ? fmtInt(usage.steps) : DASH}</span>
+              </span>
             </span>
           }
           sub={`提示 ${usageReady ? fmtInt(usage.prompts) : DASH} · 网关请求 ${

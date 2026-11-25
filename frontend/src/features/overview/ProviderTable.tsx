@@ -1,5 +1,4 @@
 import { ArrowDown, ArrowUp, ChevronsUpDown, Search, X } from 'lucide-react';
-import { Link } from '@tanstack/react-router';
 import { AuthBadge, DriftBadges, ProviderChip, StatusDot } from '@/components/shared/status';
 import { ProviderSelect } from '@/components/shared/provider-select';
 import { Toolbar } from '@/components/shared/surface';
@@ -34,6 +33,8 @@ function SortHeader({
   dir,
   onSort,
   align = 'left',
+  className,
+  title,
 }: {
   label: string;
   sortKey: SortKey;
@@ -41,31 +42,34 @@ function SortHeader({
   dir: SortDir;
   onSort: (key: SortKey) => void;
   align?: 'left' | 'right';
+  className?: string;
+  /** 覆盖默认的「按<label>排序」提示（合并列时说明并入本列的徽标）。 */
+  title?: string;
 }) {
   const active = activeKey === sortKey;
   const Icon = !active ? ChevronsUpDown : dir === 'asc' ? ArrowUp : ArrowDown;
   const ariaSort = active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none';
   return (
-    <TableHead aria-sort={ariaSort} className={align === 'right' ? 'text-right' : undefined}>
+    <TableHead aria-sort={ariaSort} className={cn(align === 'right' && 'text-right', className)}>
       <button
         type="button"
         onClick={() => onSort(sortKey)}
         className={cn(
-          'inline-flex items-center gap-1 rounded-[4px] px-1 py-0.5 text-[11px] font-semibold uppercase tracking-wide outline-none transition-colors duration-150 hover:text-text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+          'inline-flex items-center gap-1 whitespace-nowrap rounded-[4px] px-1 py-0.5 text-[11px] font-semibold tracking-wide uppercase outline-none transition-colors duration-150 hover:text-text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
           align === 'right' && 'flex-row-reverse',
           active && 'text-text-primary',
         )}
-        title={`按${label}排序`}
+        title={title ?? `按${label}排序`}
       >
-        {label}
-        <Icon className="size-3" aria-hidden />
+        <span>{label}</span>
+        {/* 指示图标在窄列（xl 左栏）隐藏，把宽度留给状态徽标与额度列；排序方向仍由 aria-sort 表达。 */}
+        <Icon className="hidden size-3 2xl:inline" aria-hidden />
       </button>
     </TableHead>
   );
 }
 
-/** 客户端筛选：关键词（q）与 provider 焦点（provider）均进 URL。 */
-export function ProviderFilters({
+/** 客户端筛选：关键词（q）与 provider 焦点（provider）均进 URL。 */export function ProviderFilters({
   providers,
   q,
   provider,
@@ -81,7 +85,7 @@ export function ProviderFilters({
   const filtered = Boolean(q || provider);
   return (
     <Toolbar aria-label="provider 筛选" surface={false} className="px-0 py-0">
-      <div className="relative min-w-[12rem] flex-1">
+      <div className="relative min-w-[9rem] flex-1">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-tertiary" aria-hidden />
         <Input
           type="search"
@@ -97,7 +101,7 @@ export function ProviderFilters({
         value={provider}
         onChange={onProvider}
         allLabel="全部 provider"
-        className="w-[12rem]"
+        className="w-40 shrink-0"
       />
       {filtered ? (
         <Button
@@ -112,27 +116,21 @@ export function ProviderFilters({
           清除筛选
         </Button>
       ) : null}
-      <span className="text-[11px] text-text-tertiary">共 {fmtInt(providers.length)} 条</span>
+      <span className="text-[11px] whitespace-nowrap text-text-tertiary">共 {fmtInt(providers.length)} 条</span>
     </Toolbar>
   );
 }
 
-const DESTINATIONS = [
-  { to: '/providers', label: '服务' },
-  { to: '/logs', label: '日志' },
-  { to: '/diagnostics', label: '诊断' },
-] as const;
-
 function OnCell({ p }: { p: ProviderStatus }) {
   if (p.overlay) {
     return (
-      <Badge variant="info" aria-label="网关为叠加层，不适用开关">
+      <Badge variant="info" aria-label="网关为叠加层，不适用开关" className="whitespace-nowrap">
         叠加
       </Badge>
     );
   }
   return (
-    <Badge variant={p.on ? 'success' : 'muted'} aria-label={p.on ? '开关：开' : '开关：关'}>
+    <Badge variant={p.on ? 'success' : 'muted'} aria-label={p.on ? '开关：开' : '开关：关'} className="whitespace-nowrap">
       {p.on ? '开' : '关'}
     </Badge>
   );
@@ -141,25 +139,34 @@ function OnCell({ p }: { p: ProviderStatus }) {
 function ClientCell({ p }: { p: ProviderStatus }) {
   if (p.ocUserOwned) {
     return (
-      <Badge variant="muted" aria-label="opencode 由用户自管">
+      <Badge variant="muted" aria-label="opencode 由用户自管" className="whitespace-nowrap">
         用户自管
       </Badge>
     );
   }
   return (
-    <Badge variant={p.oc ? 'success' : 'warning'} aria-label={p.oc ? 'opencode：已写入' : 'opencode：未写入'}>
+    <Badge
+      variant={p.oc ? 'success' : 'warning'}
+      aria-label={p.oc ? 'opencode：已写入' : 'opencode：未写入'}
+      className="whitespace-nowrap"
+    >
       {p.oc ? '已写入' : '未写入'}
     </Badge>
   );
 }
 
-/** 额度单元格：摘要文字 + 可算占比时的一条细进度条。 */
+/**
+ * 额度单元格：摘要文字 + 可算占比时的一条细进度条。
+ *
+ * 行高固定为「一行摘要 + 一条 4px 进度条」，摘要过长以省略号截断（完整文本在 `title`），
+ * 这样矩阵里所有行等高，也不会把最后一列撑出容器。
+ */
 function QuotaCell({ row }: { row: Parameters<typeof quotaBarFor>[0] }) {
   const text = quotaSummaryText(row);
   const bar = quotaBarFor(row);
   return (
-    <div className="flex max-w-[11rem] flex-col gap-1">
-      <span className="truncate text-[11px] text-text-secondary" title={text}>
+    <div className="flex h-7 min-w-[2.5rem] max-w-[14rem] flex-col justify-center gap-1">
+      <span className="block overflow-hidden text-[11px] leading-4 text-ellipsis whitespace-nowrap text-text-secondary" title={text}>
         {text}
       </span>
       {bar ? (
@@ -169,14 +176,24 @@ function QuotaCell({ row }: { row: Parameters<typeof quotaBarFor>[0] }) {
           aria-valuetext={`${Math.round(bar.pct)}%`}
           className="h-1"
         />
-      ) : null}
+      ) : (
+        <span aria-hidden className="block h-1" />
+      )}
     </div>
   );
 }
 
 /**
- * 总览 Provider 矩阵：四态独立徽标 + models(null≠0) + 额度条 + 漂移 badge。
- * 保留原有所有列、排序、选中与列表语义（仅视觉改为 Fluent 紧凑密度）。
+ * 总览 Provider 矩阵：四态独立徽标 + 端口/模型（null≠0）+ 额度条；漂移 badge 并入「进程·漂移」列。
+ *
+ * 宽度预算：xl 视口（1440px）下左栏约 790px，7 列必须全部装下、无横向裁切：
+ * - provider 列用 compact chip（只显示名称，`title` 给「名称 (id)」）；
+ * - 「进程·漂移」列同时承载进程状态与漂移 badge（明细只在详情抽屉，行内不放二级小字）；
+ *   无漂移时只显示进程状态，**不渲染空态占位**——否则「运行中 —」会被误读成「进程未知」；
+ * - 「端口」与「模型数」合并成一列（排序仍按 port）；
+ * - **移除「跳转」列**——行点击已打开详情抽屉，抽屉里有「前往服务页」。
+ * 所有状态/徽标单元格 `whitespace-nowrap`，额度列固定行高并以省略号截断，
+ * 因此每行等高、最后一列不会被容器裁掉；`<2xl` 时排序图标隐藏（aria-sort 仍表达方向）。
  */
 export function ProviderTable({
   providers,
@@ -199,16 +216,21 @@ export function ProviderTable({
     <Table containerProps={{ 'aria-label': 'provider 状态矩阵，可横向滚动' }}>
       <TableHeader>
         <TableRow>
-          <SortHeader label="Provider" sortKey="id" activeKey={sortKey} dir={sortDir} onSort={onSort} />
+          <SortHeader label="Provider" sortKey="id" activeKey={sortKey} dir={sortDir} onSort={onSort} className="px-2" />
           <SortHeader label="开关" sortKey="on" activeKey={sortKey} dir={sortDir} onSort={onSort} />
-          <SortHeader label="进程" sortKey="up" activeKey={sortKey} dir={sortDir} onSort={onSort} />
+          <SortHeader
+            label="进程·漂移"
+            sortKey="up"
+            activeKey={sortKey}
+            dir={sortDir}
+            onSort={onSort}
+            className="px-2"
+            title="按进程状态排序；漂移徽标并入本列，明细见行详情"
+          />
           <SortHeader label="认证" sortKey="auth" activeKey={sortKey} dir={sortDir} onSort={onSort} />
           <SortHeader label="客户端" sortKey="client" activeKey={sortKey} dir={sortDir} onSort={onSort} />
-          <SortHeader label="漂移" sortKey="drift" activeKey={sortKey} dir={sortDir} onSort={onSort} />
-          <SortHeader label="端口" sortKey="port" activeKey={sortKey} dir={sortDir} onSort={onSort} align="right" />
-          <SortHeader label="模型数" sortKey="models" activeKey={sortKey} dir={sortDir} onSort={onSort} align="right" />
-          <TableHead>额度</TableHead>
-          <TableHead>跳转</TableHead>
+          <SortHeader label="端口·模型" sortKey="port" activeKey={sortKey} dir={sortDir} onSort={onSort} align="right" />
+          <TableHead className="px-2">额度</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -221,61 +243,70 @@ export function ProviderTable({
               className={cn('cursor-pointer', selected && 'bg-accent-selected')}
               onClick={() => onSelect(p.id)}
             >
-              <TableCell>
+              <TableCell className="px-2">
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     onSelect(p.id);
                   }}
-                  className="flex items-center gap-2 rounded-[4px] px-1 py-0.5 text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="flex items-center gap-2 rounded-[4px] px-1 py-0 text-left whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                   aria-expanded={selected}
                 >
-                  <ProviderChip id={p.id} title={p.title} />
-                  {p.overlay ? <Badge variant="info">叠加</Badge> : null}
+                  <ProviderChip id={p.id} title={p.title} compact className="[&>span:last-child]:text-[11px]" />
+                  {p.overlay ? (
+                    <Badge variant="info" className="whitespace-nowrap">
+                      叠加
+                    </Badge>
+                  ) : null}
                   <span className="sr-only">查看详情</span>
                 </button>
               </TableCell>
-              <TableCell>
+              <TableCell className="whitespace-nowrap px-2">
                 <OnCell p={p} />
               </TableCell>
-              <TableCell>
-                <StatusDot up={p.up} />
+              <TableCell className="whitespace-nowrap px-2">
+                {/*
+                  进程状态 + 漂移同一列：漂移只显示首个 badge（其余用 +N 计数，完整文案在 title），
+                  明细留在详情抽屉。无漂移时**不渲染空态**（旧行为会在「运行中」后追加一个 `—`，
+                  被读成「进程未知/缺失」）；这样任意组合都是一行，行高恒等。
+                */}
+                <span
+                  className="inline-flex items-center gap-1.5 whitespace-nowrap"
+                  title={p.drift.length ? driftDetailText(p) : undefined}
+                  data-drift={p.drift.length ? p.drift.join(' ') : undefined}
+                  data-drift-row={p.drift.length ? 'true' : undefined}
+                >
+                  <StatusDot up={p.up} />
+                  {p.drift.length > 0 ? <DriftBadges drift={p.drift.slice(0, 1)} /> : null}
+                  {p.drift.length > 1 ? (
+                    <span className="text-[11px] whitespace-nowrap text-text-tertiary">
+                      +{p.drift.length - 1}
+                      <span className="sr-only">项漂移（完整说明见详情）</span>
+                    </span>
+                  ) : null}
+                </span>
               </TableCell>
-              <TableCell>
+              <TableCell className="whitespace-nowrap px-2">
                 <AuthBadge auth={p.auth} />
               </TableCell>
-              <TableCell>
+              <TableCell className="whitespace-nowrap px-2">
                 <ClientCell p={p} />
               </TableCell>
-              <TableCell className="max-w-[13rem]">
-                <DriftBadges drift={p.drift} />
-                {p.drift.length ? (
-                  <div className="mt-0.5 text-[10px] text-text-tertiary">{driftDetailText(p)}</div>
-                ) : null}
+              <TableCell className="text-right font-mono text-[11px] whitespace-nowrap tabular-nums">
+                <span className="inline-flex items-center gap-1.5" title={`端口 ${p.port > 0 ? p.port : DASH} · 模型 ${p.models === null ? DASH : fmtInt(p.models)}`}>
+                  <span>{p.port > 0 ? p.port : DASH}</span>
+                  <span aria-hidden className="text-text-tertiary">/</span>
+                  <span className="text-text-secondary">{p.models === null ? DASH : fmtInt(p.models)}</span>
+                  <span className="sr-only">{`端口、模型数`}</span>
+                </span>
               </TableCell>
-              <TableCell className="text-right font-mono text-[11px] tabular-nums">
-                {p.port > 0 ? p.port : DASH}
-              </TableCell>
-              <TableCell className="text-right font-mono text-[11px] tabular-nums">
-                {p.models === null ? DASH : fmtInt(p.models)}
-              </TableCell>
-              <TableCell>{p.overlay ? <span className="text-text-tertiary">{DASH}</span> : <QuotaCell row={quotaIndex.get(p.id)} />}</TableCell>
-              <TableCell>
-                <div className="flex items-center gap-2 text-[11px]">
-                  {DESTINATIONS.map((d) => (
-                    <Link
-                      key={d.to}
-                      to={d.to}
-                      search={{ provider: p.id }}
-                      onClick={(e) => e.stopPropagation()}
-                      className="rounded text-accent-rest underline-offset-4 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                      aria-label={`在${d.label}页查看 ${p.title}`}
-                    >
-                      {d.label}
-                    </Link>
-                  ))}
-                </div>
+              <TableCell className="px-2">
+                {p.overlay ? (
+                  <span className="flex h-7 items-center text-text-tertiary">{DASH}</span>
+                ) : (
+                  <QuotaCell row={quotaIndex.get(p.id)} />
+                )}
               </TableCell>
             </TableRow>
           );

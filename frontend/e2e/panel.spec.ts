@@ -27,8 +27,13 @@ test.describe('网页面板（demo）', () => {
 
   test('总览显示 provider 与演示标记', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByText('trae-local').first()).toBeVisible();
+    // demo 夹具：provider 名称与本机真实 id 一致，但顶栏常驻「演示」徽标。
+    await expect(page.getByText('Trae').first()).toBeVisible();
     await expect(page.getByText('演示', { exact: true }).first()).toBeVisible();
+    // 矩阵用 compact chip：id 只出现在详情按钮的可访问名里。
+    await expect(
+      page.getByRole('button', { name: /Trae \(trae-local\).*查看详情/ }).first(),
+    ).toBeVisible();
   });
 
   test('命令面板可用键盘打开', async ({ page }) => {

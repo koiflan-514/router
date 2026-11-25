@@ -12,6 +12,7 @@ import { Progress } from '@/components/ui/progress';
 import { useGatewayStatus } from '@/lib/query';
 import { DASH, fmtCountdown, fmtDuration, fmtInt, fmtNumber, fmtPercent } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { providerTitle } from '@/lib/provider';
 import {
   CliCommand,
   GatewayUnreachable,
@@ -52,7 +53,7 @@ function LaneCard({ lane, now }: { lane: SchedulerLane; now: number }) {
   return (
     <Card className="flex h-full flex-col">
       <div className="flex flex-wrap items-center gap-2 p-4 pb-2">
-        <ProviderChip id={lane.id} />
+        <ProviderChip id={lane.id} title={providerTitle(lane.id)} compact />
         <Badge variant={meta.variant}>{meta.label}</Badge>
         {cooling ? (
           <Badge variant="warning">

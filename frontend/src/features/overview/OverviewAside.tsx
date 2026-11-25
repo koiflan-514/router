@@ -144,10 +144,61 @@ function QuotaTopPanel({ payload, error }: { payload: QuotaPayload | null; error
   );
 }
 
-/** 近 7 天用量：只画 activity 真实点。 */
-function UsageTrendPanel({ usage }: { usage: UsageStats | null }) {
+/**
+ * 近 7 天用量：只画 activity 真实点。
+ *
+ * 三态必须区分开，否则「接口失败」会被误读成「真的没有活动」：
+ * - `error`：明确报错 + 重试入口（不画占位曲线，也不显示「没有 activity」）；
+ * - `loading`：读取中；
+ * - 请求成功但没有序列：空态文案。
+ */
+function UsageTrendPanel({
+  usage,
+  error,
+  loading,
+}: {
+  usage: UsageStats | null;
+  error?: string | null;
+  loading?: boolean;
+}) {
   const series = activityValues(usage);
   const has = series.filter((n) => Number.isFinite(n)).length >= 2;
+  if (error) {
+    return (
+      <Panel
+        title="近 7 天用量"
+        description="OpenCode 会话统计（7d），单位为 steps"
+        action={
+          <Link
+            to="/usage"
+            search={{ range: '7d' }}
+            className="inline-flex items-center gap-1 rounded text-[11px] text-warning underline-offset-4 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            去用量页重试 <ArrowRight aria-hidden className="size-3" />
+          </Link>
+        }
+      >
+        <div
+          role="alert"
+          data-usage-state="error"
+          className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"
+        >
+          <span className="font-medium">用量读取失败：{error}</span>
+          <span className="text-text-secondary">
+            这是查询失败，不是「没有活动」；趋势线不绘制。可在
+            <Link
+              to="/usage"
+              search={{ range: '7d' }}
+              className="mx-0.5 rounded text-accent-rest underline-offset-4 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              用量页
+            </Link>
+            重试。
+          </span>
+        </div>
+      </Panel>
+    );
+  }
   return (
     <Panel
       title="近 7 天用量"
@@ -162,18 +213,28 @@ function UsageTrendPanel({ usage }: { usage: UsageStats | null }) {
         </Link>
       }
     >
-      {has ? (
+      {loading && !usage ? (
+        <div
+          data-usage-state="loading"
+          className="flex h-[64px] items-center rounded-md border border-dashed border-stroke-2 bg-surface-2/40 px-3 text-[11px] text-text-tertiary"
+        >
+          正在读取用量…
+        </div>
+      ) : has ? (
         <Sparkline
           data={series}
           width={320}
           height={64}
           className="w-full"
-          label="近 7 天会话步骤"
+          label="近 7 天会话步骤趋势"
           description={`共 ${series.length} 天，峰值 ${Math.max(...series)}`}
           dot
         />
       ) : (
-        <div className="flex h-[64px] items-center rounded-md border border-dashed border-stroke-2 bg-surface-2/40 px-3 text-[11px] text-text-tertiary">
+        <div
+          data-usage-state="empty"
+          className="flex h-[64px] items-center rounded-md border border-dashed border-stroke-2 bg-surface-2/40 px-3 text-[11px] text-text-tertiary"
+        >
           没有 activity 序列，不绘制趋势线。
         </div>
       )}
@@ -233,19 +294,24 @@ export function OverviewAside({
   quota,
   quotaError,
   usage,
+  usageError,
+  usageLoading,
   onSelect,
 }: {
   providers: ProviderStatus[];
   quota: QuotaPayload | null;
   quotaError: boolean;
   usage: UsageStats | null;
+  /** `/api/usage` 的错误消息；非空时右栏显式报错，不再显示「没有 activity」。 */
+  usageError?: string | null;
+  usageLoading?: boolean;
   onSelect: (id: string) => void;
 }) {
   return (
     <aside aria-label="健康度与待处理事项" className="flex flex-col gap-3">
       <HealthPanel providers={providers} />
       <QuotaTopPanel payload={quota} error={quotaError} />
-      <UsageTrendPanel usage={usage} />
+      <UsageTrendPanel usage={usage} error={usageError} loading={usageLoading} />
       <AttentionPanel providers={providers} onSelect={onSelect} />
     </aside>
   );

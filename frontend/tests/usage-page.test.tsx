@@ -71,4 +71,46 @@ describe('UsagePage 冒烟', () => {
     render(<UsagePage />);
     expect(screen.getByText('该时间范围内没有用量数据')).toBeInTheDocument();
   });
+
+  it('缓存读取超过输入 100% 时用倍数表达，绝对 token 数保留', () => {
+    // 真实截图里的数字：读取 2,043,581,874 ≈ 输入 94,817,941 的 21.55 倍。
+    mocks.useUsage.mockReturnValue(
+      res(
+        usageStatsSchema.parse({
+          sessions: 19,
+          steps: 17_402,
+          tokens: {
+            input: 94_817_941,
+            output: 5_686_134,
+            reasoning: 4_963_048,
+            cache: { read: 2_043_581_874, write: 0 },
+          },
+        }),
+      ),
+    );
+    render(<UsagePage />);
+    // 比例文案不再出现 2155.3% 这种像错误值的百分比。
+    expect(screen.queryByText(/2155/)).not.toBeInTheDocument();
+    expect(screen.getAllByText('21.6× 输入').length).toBeGreaterThan(0);
+    // 绝对数原样展示（不截断、不舍入成 0）。
+    expect(screen.getAllByText('2,043,581,874').length).toBeGreaterThan(0);
+    // 缓存写为 0 是真实值：显示 0.0%。
+    expect(screen.getAllByText('0.0% 输入').length).toBeGreaterThan(0);
+  });
+
+  it('输入 Token 为 0 时缓存比例显示 —（不除零）', () => {
+    mocks.useUsage.mockReturnValue(
+      res(
+        usageStatsSchema.parse({
+          sessions: 1,
+          steps: 2,
+          tokens: { input: 0, cache: { read: 500, write: 20 } },
+        }),
+      ),
+    );
+    render(<UsagePage />);
+    // 缓存卡片自身说明分母为 0；比例位是 DASH，不伪造 0% 或倍数。
+    expect(screen.getAllByText(/输入 Token 为 0，无法计算比例/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/× 输入/)).not.toBeInTheDocument();
+  });
 });

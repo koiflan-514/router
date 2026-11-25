@@ -12,6 +12,7 @@ import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useGatewayUsage } from '@/lib/query';
 import { DASH, fmtCompact, fmtDuration, fmtInt, fmtPercent } from '@/lib/format';
+import { providerTitle } from '@/lib/provider';
 import { GatewayUnreachable, InfoNote, isUnreachable } from './gateway-shared';
 import { GatewayTokenChart, GatewayTrafficChart } from './GatewayUsageCharts';
 import {
@@ -74,7 +75,7 @@ function AggTable({
                   <TableCell className="min-w-44">
                     <div className="flex flex-col gap-1">
                       {kind === 'provider' ? (
-                        <ProviderChip id={row.label} />
+                        <ProviderChip id={row.label} title={providerTitle(row.label)} compact />
                       ) : (
                         <span className="font-mono">{row.label}</span>
                       )}

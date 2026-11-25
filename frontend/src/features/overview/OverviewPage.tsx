@@ -11,12 +11,11 @@ import { useEnv, useGatewayStatus, useProviders, useQuota, useUsage } from '@/li
 import { DataSourceBar, type DataSource } from './DataSourceBar';
 import { AttentionList } from './AttentionList';
 import { OverviewAside } from './OverviewAside';
-import { OverviewKpiTiles, Usage7dPanel } from './OverviewKpi';
+import { OverviewKpiTiles } from './OverviewKpi';
 import { ProviderDetailSheet } from './ProviderDetailSheet';
 import { ProviderFilters, ProviderTable } from './ProviderTable';
-import { SummaryStrip } from './SummaryStrip';
 import { TopologyFlow } from './TopologyFlow';
-import { UsageKpiCards } from './KpiCards';
+import { UsageOverviewStrip } from './KpiCards';
 import {
   buildQuotaIndex,
   deriveSummary,
@@ -36,7 +35,9 @@ import {
  * 3. 服务拓扑流向条（来源 → 网关 → 客户端，纯展示）
  * 4. 主区两栏：左 = provider 矩阵（筛选/排序/详情抽屉），右 = 健康度/额度/用量/待处理
  *    宽屏(≥1280px) 并排，窄屏自动折叠到主区下方
- * 5. 底部：近 7 天用量 KPI（与 /usage 同源）与异常入口
+ * 5. 底部：近 7 天用量概览（一条紧凑指标 + 跳转，与 /usage 同源）
+ *
+ * 汇总数字只在矩阵表头出现一次（KPI 瓦片已经覆盖顶层口径），不再单独渲染重复的汇总条。
  *
  * 本页只读：不渲染任何写操作控件，异常只给「下一步」跳转。
  */
@@ -96,12 +97,13 @@ export function OverviewPage() {
     ? (providerList.find((p) => p.id === providerParam) ?? null)
     : null;
 
+  /** 逐源记录失败：没有成功时间时显「失败」，有过成功时间时显「（刷新失败）」。 */
   const sources: DataSource[] = [
-    { label: '服务', lastSuccessAt: providers.lastSuccessAt, stale: providers.stale },
-    { label: '额度', lastSuccessAt: quota.lastSuccessAt, stale: quota.stale },
-    { label: '用量', lastSuccessAt: usage.lastSuccessAt, stale: usage.stale },
-    { label: '网关', lastSuccessAt: gateway.lastSuccessAt, stale: gateway.stale },
-    { label: '环境', lastSuccessAt: env.lastSuccessAt, stale: env.stale },
+    { label: '服务', lastSuccessAt: providers.lastSuccessAt, stale: providers.stale, failed: Boolean(providers.error), error: providers.error?.message ?? null },
+    { label: '额度', lastSuccessAt: quota.lastSuccessAt, stale: quota.stale, failed: Boolean(quota.error), error: quota.error?.message ?? null },
+    { label: '用量', lastSuccessAt: usage.lastSuccessAt, stale: usage.stale, failed: Boolean(usage.error), error: usage.error?.message ?? null },
+    { label: '网关', lastSuccessAt: gateway.lastSuccessAt, stale: gateway.stale, failed: Boolean(gateway.error), error: gateway.error?.message ?? null },
+    { label: '环境', lastSuccessAt: env.lastSuccessAt, stale: env.stale, failed: Boolean(env.error), error: env.error?.message ?? null },
   ];
 
   const summary = deriveSummary(providerList);
@@ -127,17 +129,13 @@ export function OverviewPage() {
 
       <DataSourceBar sources={sources} />
 
-      <OverviewKpiTiles
-        providers={providerList}
-        quota={quota.data}
-        usage={usage.data}
-      />
+      <OverviewKpiTiles providers={providerList} quota={quota.data} />
 
       <DataState res={providers} loadingLabel="正在读取 provider 状态…" isEmpty={(d) => d.length === 0} empty={null}>
         {(data) => <TopologyFlow providers={data} />}
       </DataState>
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_22rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]">
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_18rem] 2xl:grid-cols-[minmax(0,1fr)_22rem]">
         {/* 主区：provider 矩阵 */}
         <section aria-label="provider 状态矩阵" className="flex min-w-0 flex-col gap-3">
           <DataState
@@ -147,7 +145,7 @@ export function OverviewPage() {
             empty={
               <Empty
                 title="桥接没有返回任何 provider"
-                description="检查桥接服务与 router.mjs 的 list --json 输出；网关条目应与八家一起出现。"
+                description="检查桥接服务与 router.mjs 的 list --json 输出；网关条目应与十三家一起出现。"
               />
             }
           >
@@ -155,14 +153,13 @@ export function OverviewPage() {
               const rows = sortProviders(filterProviders(data, q, providerParam), sortKey, sortDir);
               return (
                 <>
-                  <SummaryStrip providers={data} quotaIndex={quotaIndex} />
                   <div className="layer-1 flex flex-col overflow-hidden">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-stroke-1 px-3 py-2">
                       <SectionHeader
                         as="h3"
                         density="compact"
                         title="Provider 矩阵"
-                        description={`已启用 ${summary.enabled} / ${summary.total} · 漂移 ${summary.drifted} · 认证告警 ${summary.authIssues}`}
+                        description={`运行 ${summary.running}/${summary.total} · 已启用 ${summary.enabled}/${summary.total} · 漂移 ${summary.drifted} · 认证告警 ${summary.authIssues}`}
                         className="min-w-0 flex-1"
                       />
                       <ProviderFilters
@@ -222,13 +219,15 @@ export function OverviewPage() {
           quota={quota.data}
           quotaError={Boolean(quota.error)}
           usage={usage.data}
+          usageError={usage.error?.message ?? null}
+          usageLoading={usage.loading}
           onSelect={(id) => patch({ provider: id, panel: 'provider' })}
         />
       </div>
 
-      <div className="flex flex-col gap-3">
+      <section aria-label="用量概览（近 7 天）" className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-display text-ramp-16 font-semibold tracking-tight">用量指标 · 近 7 天</h2>
+          <h2 className="font-display text-ramp-16 font-semibold tracking-tight">用量概览 · 近 7 天</h2>
           <Link
             to="/usage"
             search={{ range: '7d' }}
@@ -244,20 +243,13 @@ export function OverviewPage() {
           empty={
             <Empty
               title="近 7 天没有会话数据"
-              description="OpenCode 统计接口返回为空。这是合法空状态，不是查询失败；不会生成随机曲线或假数值。"
+              description="OpenCode 统计接口返回为空。这是合法空状态，不是查询失败；不会生成随机曲线或假数值。趋势图在右侧「近 7 天用量」面板。"
             />
           }
         >
-          {(data) => (
-            <div className="flex flex-col gap-3">
-              <UsageKpiCards usage={data} />
-              <div className="layer-1 p-3.5">
-                <Usage7dPanel usage={data} />
-              </div>
-            </div>
-          )}
+          {(data) => <UsageOverviewStrip usage={data} />}
         </DataState>
-      </div>
+      </section>
 
       <ProviderDetailSheet
         provider={selectedProvider}

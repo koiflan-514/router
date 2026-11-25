@@ -13,16 +13,21 @@ const AUTH_STATES = new Set(['valid', 'expiring', 'expired', 'missing', 'unknown
 const HEALTH_LEVELS = new Set(['ok', 'warn', 'error', 'unknown']);
 const DIALECTS = new Set(['openai', 'anthropic', 'both']);
 
+// 顺序与 `router.mjs list --json` 的 providers[] 保持一致；gateway 是叠加层，不在此列。
 export const PROVIDER_IDS = [
   'qoder-cn',
   'qoder',
   'trae-local',
   'codearts',
   'zcode',
-  'workbuddy',
-  'workbuddy-global',
   'loomy',
   'raccoon',
+  'qwenwork',
+  'dumate',
+  'lingxi',
+  'lobster',
+  'workbuddy',
+  'workbuddy-global',
 ];
 export const ACTION_PROVIDER_WHITELIST = new Set([...PROVIDER_IDS, 'gateway']);
 
@@ -349,6 +354,10 @@ export function toGatewayKey(raw) {
  *
  * 上游可能给 `null` 或缺失的数字字段；契约里这些是 `z.number()`，直接透传会
  * 让前端 schema 解析失败。这里只把**已知数值字段**兜底成 0，未知字段仍原样保留。
+ *
+ * `models[]` 的真实形状是 `{ model: { id, providerID, variant }, steps, tokens, cost }`，
+ * 而前端契约要求扁平的 `{ id, providerID, steps, tokens, cost }`。这里逐条摊平并按
+ * `providerID/id` 去重合并（同模型不同 variant 的 steps 相加），**不补假模型、不补假数值**。
  */
 export function toUsageStats(raw, { range, from, to }) {
   const stats = raw && typeof raw === 'object' ? raw : {};
@@ -387,13 +396,59 @@ export function toUsageStats(raw, { range, from, to }) {
     activity: Array.isArray(stats.activity)
       ? stats.activity.filter((a) => a && typeof a === 'object').map((a) => ({ ...a, steps: n(a.steps) }))
       : [],
-    models: Array.isArray(stats.models)
-      ? stats.models
-          .filter((m) => m && typeof m === 'object')
-          .map((m) => ({ ...m, id: str(m.id), providerID: str(m.providerID), steps: n(m.steps), cost: n(m.cost) }))
-      : [],
+    models: normalizeUsageModels(stats.models),
     range: stats.range && typeof stats.range === 'object' ? stats.range : { from, to },
     queryRange: range,
+  };
+}
+
+/**
+ * `stats.models[]` → 前端契约的扁平模型行。
+ *
+ * 真实 CLI 给的是 `{ model: { id, providerID, variant } }`；样例/旧夹具给的是扁平 `{ id, providerID }`。
+ * 两种都接受；同一 `providerID/id` 的多条（不同 variant）合并成一行，steps/cost 相加，
+ * tokens 逐字段相加。空 id 的行丢弃（没有可展示的模型名，不编造）。
+ */
+export function normalizeUsageModels(list) {
+  if (!Array.isArray(list)) return [];
+  const merged = new Map();
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const nested = item.model && typeof item.model === 'object' ? item.model : {};
+    const id = str(item.id) || str(nested.id);
+    if (!id) continue;
+    const providerID = str(item.providerID) || str(nested.providerID);
+    const key = `${providerID}/${id}`;
+    const row = merged.get(key) ?? { id, providerID, steps: 0, cost: 0 };
+    const steps = item.steps;
+    const cost = item.cost;
+    row.steps += typeof steps === 'number' && Number.isFinite(steps) ? steps : 0;
+    row.cost += typeof cost === 'number' && Number.isFinite(cost) ? cost : 0;
+    if (item.tokens && typeof item.tokens === 'object') {
+      // tokens 是契约里的 `record<string, number>`：缓存读写摊平成 cacheRead / cacheWrite 两个数字键。
+      const t = tokensOf(item.tokens);
+      const prev = row.tokens ?? { input: 0, output: 0, reasoning: 0 };
+      row.tokens = { ...prev, input: prev.input + t.input, output: prev.output + t.output, reasoning: prev.reasoning + t.reasoning };
+      if (t.cache) {
+        row.tokens.cacheRead = (prev.cacheRead ?? 0) + t.cache.read;
+        row.tokens.cacheWrite = (prev.cacheWrite ?? 0) + t.cache.write;
+      }
+    }
+    merged.set(key, row);
+  }
+  return [...merged.values()];
+}
+
+/** 逐条模型行的 tokens 兜底（数值字段非有限数按 0，不猜）。 */
+function tokensOf(t) {
+  const tRaw = t && typeof t === 'object' ? t : {};
+  const cRaw = tRaw.cache && typeof tRaw.cache === 'object' ? tRaw.cache : null;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return {
+    input: num(tRaw.input),
+    output: num(tRaw.output),
+    reasoning: num(tRaw.reasoning),
+    ...(cRaw ? { cache: { read: num(cRaw.read), write: num(cRaw.write) } } : {}),
   };
 }
 

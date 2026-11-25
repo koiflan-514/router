@@ -13,7 +13,10 @@ test.describe('网关', () => {
     await expect(page.getByText('额度比', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('粘性会话', { exact: true }).first()).toBeVisible();
 
-    await expect(page.getByText('trae-local', { exact: true }).first()).toBeVisible();
+    // 三个网关页的 chip 用 compact：可见文本只有中文名，id 只进 title / aria-label。
+    const traeChip = page.locator('[title*="(trae-local)"]').first();
+    await expect(traeChip).toBeVisible();
+    await expect(traeChip).toContainText('Trae');
     await expect(page.getByText('运行中', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('已停止', { exact: true }).first()).toBeVisible();
 

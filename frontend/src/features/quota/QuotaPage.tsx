@@ -186,11 +186,16 @@ function ProviderQuotaCard({
   const checkin = checkinBadge(row.checkin);
 
   return (
-    <Card className="flex h-full flex-col">
+    // 不加 h-full：网格 `items-start` 后短卡保持自身高度，避免被同行的长卡拉出大片空白。
+    <Card className="flex flex-col">
       <CardHeader className="gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <ProviderChip id={row.provider} title={row.title} />
-          {row.kind ? <span className="font-mono text-[11px] text-muted-foreground">{row.kind}</span> : null}
+          {/* 卡片头部只显示名称（title 保留 id）；完整 id 仍在账号页/详情里可查。 */}
+          <ProviderChip id={row.provider} title={row.title} compact />
+          {/* kind 与 provider/名称相同时不重复渲染（同一来源两遍没有信息量）。 */}
+          {row.kind && row.kind !== row.provider && row.kind !== row.title ? (
+            <span className="font-mono text-[11px] text-muted-foreground">{row.kind}</span>
+          ) : null}
           <RowStatusBadge row={row} />
           {workbuddy ? <Badge variant="info">凭证有效期</Badge> : null}
           {checkin ? <Badge variant={checkin.variant}>{checkin.label}</Badge> : null}
@@ -224,7 +229,11 @@ function ProviderQuotaCard({
               {row.account ?? (accountCount(row) ? `${accountCount(row)} 个` : DASH)}
             </span>
           </span>
-          {workbuddy ? <span>凭证天数单独展示，不并入 credits</span> : null}
+          {workbuddy ? (
+            <span className="whitespace-nowrap" title="WorkBuddy 的凭证剩余天数按「天」独立成桶，不与 credits 相加">
+              凭证剩余天数（天）独立展示，不并入 credits
+            </span>
+          ) : null}
         </div>
         {!accountBuckets && row.accounts.length ? (
           <div className="text-xs text-muted-foreground">
@@ -485,7 +494,7 @@ export function QuotaPage() {
               </div>
 
               {visible.length ? (
-                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2 2xl:grid-cols-3">
                   {visible.map((row) => (
                     <ProviderQuotaCard
                       key={row.provider}

@@ -3,7 +3,12 @@ import type { UsageStats } from '@/lib/contract';
 import { DASH, fmtCompact, fmtInt, fmtNumber, fmtPercent } from '@/lib/format';
 import { activityPoints, tokenComposition, toolsSummary } from './usage-model';
 
-/** 六张 KPI 卡：会话/提示、steps、Token 构成、成本、活跃天数、工具成功率。 */
+/**
+ * 六张 KPI 卡：会话/提示、steps、Token 构成、成本、活跃天数、工具成功率。
+ *
+ * 页面顶部已有一条统一口径说明条（steps ≠ 请求数、cost ≠ 积分、工具成功率 ≠ 模型请求成功率），
+ * 这里只保留**卡内独有**的信息（子会话数、缓存读写的另计关系、活跃/连续含义），不再重复长 hint。
+ */
 export function UsageKpis({ data }: { data: UsageStats }) {
   const tools = toolsSummary(data);
   const cacheRead = data.tokens.cache?.read;
@@ -22,16 +27,12 @@ export function UsageKpis({ data }: { data: UsageStats }) {
           </span>
         }
         sub={`子会话 ${fmtInt(data.subagents)}`}
-        hint="提示数不等同模型请求数"
       />
 
       <MetricCard
         label="会话步骤"
         value={fmtInt(data.steps)}
-        sub={
-          hasActivity ? `按日 ${points.length} 个活动点` : '没有按日活动数据'
-        }
-        hint="steps 是 OpenCode 会话步骤，不是 HTTP 请求数"
+        sub={hasActivity ? `按日 ${points.length} 个活动点` : '没有按日活动数据'}
         spark={hasActivity ? stepsSeries : undefined}
         sparkLabel="按日 steps 趋势（真实活动点，不做插值）"
       />
@@ -46,9 +47,7 @@ export function UsageKpis({ data }: { data: UsageStats }) {
           </span>
         }
         hint={
-          <span className="tabular-nums">
-            缓存读 {fmtCompact(cacheRead)} · 缓存写 {fmtCompact(cacheWrite)}（另计）
-          </span>
+          <span className="tabular-nums">缓存读 {fmtCompact(cacheRead)} · 缓存写 {fmtCompact(cacheWrite)}（另计）</span>
         }
       />
 
@@ -56,8 +55,6 @@ export function UsageKpis({ data }: { data: UsageStats }) {
         label="上报成本"
         value={data.cost > 0 ? fmtNumber(data.cost) : DASH}
         sub={data.cost > 0 ? 'OpenCode 上报值' : '—（OpenCode 未上报）'}
-        hint="不等于积分余额，不折算、不跨厂商求和"
-        tone={data.cost > 0 ? 'default' : 'default'}
       />
 
       <MetricCard
@@ -68,7 +65,6 @@ export function UsageKpis({ data }: { data: UsageStats }) {
           </span>
         }
         sub="活跃天数 / 连续活跃天数"
-        hint="原样展示，不做趋势推断"
       />
 
       <MetricCard
@@ -77,14 +73,11 @@ export function UsageKpis({ data }: { data: UsageStats }) {
         sub={
           tools ? (
             <span className="tabular-nums">
-              成功 {fmtInt(tools.succeeded)} · 失败 {fmtInt(tools.failed)} · 未完成{' '}
-              {fmtInt(tools.pending)}
+              成功 {fmtInt(tools.succeeded)} · 失败 {fmtInt(tools.failed)} · 未完成 {fmtInt(tools.pending)}
             </span>
           ) : (
             '无工具调用数据'
-          )
-        }
-        hint="工具调用成功率，不代表模型请求成功率"
+          )}
         tone={tools ? (tools.rate < 0.8 ? 'warning' : 'default') : 'default'}
       />
     </div>

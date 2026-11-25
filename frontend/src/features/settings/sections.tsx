@@ -50,7 +50,7 @@ import { providerColorVar } from '@/lib/provider';
 import type { PanelEnv } from '@/lib/schemas';
 import type { ProviderStatus } from '@/lib/contract';
 import type { Res } from '@/lib/query';
-import { useTheme, type Theme } from '@/lib/theme';
+import { useTheme, type Contrast, type Theme } from '@/lib/theme';
 import { cn } from '@/lib/cn';
 import {
   RANGE_LABEL,
@@ -142,11 +142,17 @@ const THEME_OPTIONS: Array<{ value: Theme; label: string; hint: string; icon: ty
   { value: 'system', label: '跟随系统', hint: '随操作系统主题切换', icon: Laptop },
 ];
 
+const CONTRAST_OPTIONS: Array<{ value: Contrast; label: string; hint: string }> = [
+  { value: 'normal', label: '标准', hint: '默认配色' },
+  { value: 'high', label: '高对比', hint: '加粗描边、提高文字对比' },
+];
+
 export function AppearanceCard() {
-  const { theme, resolved, setTheme } = useTheme();
+  const { theme, resolved, setTheme, contrast, setContrast } = useTheme();
   const reducedMotion = usePrefersReducedMotion();
   const resolvedLabel = resolved === 'dark' ? '深色' : '浅色';
   const themeLabel = THEME_OPTIONS.find((o) => o.value === theme)?.label ?? theme;
+  const contrastLabel = CONTRAST_OPTIONS.find((o) => o.value === contrast)?.label ?? contrast;
 
   return (
     <SectionCard
@@ -195,6 +201,42 @@ export function AppearanceCard() {
 
       <Separator className="my-3" />
 
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-1 text-sm font-medium">对比度</legend>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {CONTRAST_OPTIONS.map(({ value, label, hint }) => {
+            const id = `panel-contrast-${value}`;
+            const active = contrast === value;
+            return (
+              <label
+                key={value}
+                htmlFor={id}
+                className={cn(
+                  'flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm outline-none transition-colors focus-within:ring-2 focus-within:ring-ring/50',
+                  active ? 'border-primary bg-accent text-accent-foreground' : 'border-border hover:bg-accent/50',
+                )}
+              >
+                <input
+                  id={id}
+                  type="radio"
+                  name="panel-contrast"
+                  value={value}
+                  checked={active}
+                  onChange={() => setContrast(value)}
+                  className="mt-0.5 size-4 accent-primary"
+                />
+                <span className="flex flex-col gap-0.5">
+                  <span className="font-medium">{label}</span>
+                  <span className="text-xs text-muted-foreground">{hint}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
+
+      <Separator className="my-3" />
+
       <dl className="text-sm">
         <DefRow label="当前主题">
           {themeLabel}
@@ -206,8 +248,18 @@ export function AppearanceCard() {
             {resolvedLabel}
           </span>
         </DefRow>
+        <DefRow label="当前对比度">
+          <span className="inline-flex items-center gap-1.5">
+            {contrast === 'high' ? (
+              <CircleCheck className="size-3.5 text-success" aria-hidden />
+            ) : (
+              <CircleAlert className="size-3.5 text-muted-foreground" aria-hidden />
+            )}
+            {contrastLabel}
+          </span>
+        </DefRow>
         <DefRow label="存储位置">
-          <code className="font-mono text-xs">localStorage: router-panel-theme</code>
+          <code className="font-mono text-xs">localStorage: router-panel-theme / router-panel-contrast</code>
         </DefRow>
         <DefRow label="减少动效">
           <span className="inline-flex items-center gap-1.5">
@@ -222,7 +274,8 @@ export function AppearanceCard() {
       </dl>
       <p className="mt-2 text-xs text-muted-foreground">
         已尊重系统的 <code className="font-mono">prefers-color-scheme</code>（选择“跟随系统”时）
-        与 <code className="font-mono">prefers-reduced-motion</code>（开启后页面动效降至最低）。
+        与 <code className="font-mono">prefers-reduced-motion</code>（开启后页面动效降至最低）；
+        也支持系统 <code className="font-mono">prefers-contrast</code>：系统要求更多对比度时会自动启用高对比（此时手动选“标准”也会被系统偏好覆盖）。
       </p>
     </SectionCard>
   );

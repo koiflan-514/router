@@ -9,6 +9,7 @@ import { Empty } from '@/components/ui/empty';
 import { useGatewayCombos, useGatewayStatus } from '@/lib/query';
 import { DASH } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { providerTitle } from '@/lib/provider';
 import {
   CliCommand,
   GatewayUnreachable,
@@ -70,7 +71,7 @@ function ChainStep({
         {step.index + 1}
       </span>
       {step.provider ? (
-        <ProviderChip id={step.provider} />
+        <ProviderChip id={step.provider} title={providerTitle(step.provider)} compact />
       ) : (
         <span className="text-muted-foreground">{DASH}</span>
       )}

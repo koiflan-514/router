@@ -94,7 +94,10 @@ export function createGateway({ cli, host = '127.0.0.1', port = 8785, timeoutMs 
     },
 
     async balance() {
-      const raw = await call('/v1/gateway/balance');
+      // 额度采集要逐家打上游，个别 provider 的采集超时可达 24s（实测网关侧
+      // /v1/gateway/balance 稳定 ~24s）。这里必须给足时间，否则额度接口会在
+      // 采集完成前被 8s 的通用网关超时中止，真实模式下 /api/quota 永远 502。
+      const raw = await call('/v1/gateway/balance', { timeout: 45_000 });
       const providers = Array.isArray(raw?.providers) ? raw.providers.map(toQuotaRow) : [];
       return {
         fetchedAt: typeof raw?.fetchedAt === 'string' ? raw.fetchedAt : new Date().toISOString(),

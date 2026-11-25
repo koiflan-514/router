@@ -82,12 +82,33 @@ export function DriftBadges({ drift }: { drift: DriftKind[] }) {
   );
 }
 
-export function ProviderChip({ id, title, className }: { id: string; title?: string; className?: string }) {
+/**
+ * Provider 分类色圆点 + 名称（+ 可选 id）。
+ *
+ * `compact` 只显示名称，id 放进 `title`，用于表格这类横向空间紧张的场合；
+ * 可访问名始终是「名称 (id)」，屏幕阅读器仍能听到 id。默认行为不变。
+ */
+export function ProviderChip({
+  id,
+  title,
+  className,
+  compact = false,
+}: {
+  id: string;
+  title?: string;
+  className?: string;
+  compact?: boolean;
+}) {
+  const name = title ?? id;
   return (
-    <span className={cn('inline-flex items-center gap-2', className)}>
-      <span aria-hidden className="size-2.5 rounded-sm" style={{ backgroundColor: providerColorVar(id) }} />
-      <span className="font-medium">{title ?? id}</span>
-      <span className="font-mono text-[11px] text-muted-foreground">{id}</span>
+    <span
+      className={cn('inline-flex items-center gap-2', className)}
+      aria-label={compact ? `${name} (${id})` : undefined}
+      title={compact ? `${name} (${id})` : undefined}
+    >
+      <span aria-hidden className="size-2.5 shrink-0 rounded-sm" style={{ backgroundColor: providerColorVar(id) }} />
+      <span className="font-medium whitespace-nowrap">{name}</span>
+      {compact ? null : <span className="font-mono text-[11px] text-muted-foreground">{id}</span>}
     </span>
   );
 }

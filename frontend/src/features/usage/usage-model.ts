@@ -413,6 +413,29 @@ export function cacheEfficiency(data: UsageStats): CacheEfficiency | null {
   };
 }
 
+/** 倍数的展示位数：<10 给两位（2.56×），≥10 给一位（21.6×，与「两位有效数字」同精度），量级不丢。 */
+function timesText(ratio: number): string {
+  const value = ratio < 10 ? ratio.toFixed(2) : ratio.toFixed(1);
+  return `${value.replace(/\.?0+$/, '')}×`;
+}
+
+/**
+ * 缓存读/写相对「输入 Token」的展示文案（14 §4：缓存量与输入是**不同量级**的计数，
+ * 不是构成比例）。
+ *
+ * 真实数据里缓存读取常常是输入的上千倍（`2,043,581,874 / 94,817,941 ≈ 2155%`），
+ * 写成百分比虽然数学正确，却像错误值；因此：
+ * - ratio > 1：倍数表达（`21.6× 输入`）；
+ * - 0 < ratio ≤ 1：百分比（`32.0% 输入`）；
+ * - ratio === 0：`0.0% 输入`（真的没有缓存命中，不是未知）；
+ * - input = 0 / 未知（ratio === null）：`—`，不做除法、不编造比例。
+ */
+export function cacheRatioText(ratio: number | null): string {
+  if (ratio === null || !Number.isFinite(ratio)) return '—';
+  if (ratio > 1) return `${timesText(ratio)} 输入`;
+  return `${(ratio * 100).toFixed(1)}% 输入`;
+}
+
 /** 导出 CSV：Token 汇总 + 每日活动 + 模型表。字段保留原始数值，不写格式化后的千分位。 */
 export function usageCsv(data: UsageStats, models: ModelRow[] = data.models): string {
   const header = [

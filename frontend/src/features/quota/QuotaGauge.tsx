@@ -156,16 +156,18 @@ export function QuotaGauge({
               已用 {gauge.used === null ? DASH : fmtInt(gauge.used)} {gauge.unit}
             </div>
           )}
-          <div className="mt-1 text-[11px] leading-snug text-muted-foreground">
-            {resetIso ? (
-              <>
-                重置 <span className="tabular-nums">{resetIso.slice(0, 10)}</span>
-                {resetCountdown ? ` · ${resetCountdown}` : ''}
-              </>
-            ) : (
-              '未提供重置日'
-            )}
-          </div>
+        <div className="mt-1 text-[11px] leading-snug text-muted-foreground">
+          {resetIso ? (
+            <>
+              重置 <span className="tabular-nums">{resetIso.slice(0, 10)}</span>
+              {resetCountdown ? ` · ${resetCountdown}` : ''}
+            </>
+          ) : (
+            <span className="whitespace-nowrap" title="接口未提供下次重置日，不推断">
+              未提供重置日
+            </span>
+          )}
+        </div>
           {typeof bucket.expiring === 'number' && bucket.expiring > 0 ? (
             <div className="text-[11px] text-warning">
               即将过期 {fmtNumber(bucket.expiring)} {gauge.unit}

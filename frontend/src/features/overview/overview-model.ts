@@ -1,5 +1,6 @@
 import {
   DASH,
+  fmtInt,
   fmtNumber,
 } from '@/lib/format';
 import type { AuthState, ProviderStatus, QuotaRow, UsageStats } from '@/lib/contract';
@@ -274,7 +275,7 @@ export interface HealthBreakdown {
 /**
  * 健康度 = 四项达标率的平均（运行 / 认证正常 / 客户端已写入 / 无漂移）。
  *
- * 口径与 SummaryStrip 一致：各项独立计数；网关叠加层不计入 managed，
+ * 口径与矩阵表头的汇总一致：各项独立计数；网关叠加层不计入 managed，
  * 认证 unknown 计为不达标（与 isAuthIssue 对齐）。
  */
 export function deriveHealth(providers: ProviderStatus[]): HealthBreakdown {
@@ -340,6 +341,38 @@ export function attentionItems(providers: ProviderStatus[]): AttentionItem[] {
 /** 可领取数：后端显式 checkin.claimable=true 的来源数。 */
 export function claimableCount(payload: { providers: QuotaRow[] } | null): number {
   return (payload?.providers ?? []).filter((r) => r.checkin?.claimable).length;
+}
+
+export interface QuotaCoverageStats {
+  /** 可查来源数（available !== false）。 */
+  available: number;
+  /** 总来源数（额度接口返回的行数）。 */
+  total: number;
+  /** available === false 的来源数。 */
+  unavailable: number;
+  /** 采集失败（error 非空）的来源数。 */
+  errors: number;
+  /** 额度卡副标题：覆盖 + 不可用/采集失败，全部为纯计数。 */
+  sub: string;
+}
+
+/**
+ * 额度覆盖统计（KPI 卡副标题用）。
+ *
+ * 只数 `quota.providers` 行：`available` 与 `error` 都是后端字段，
+ * 不做跨厂商求和，也不把「无数据」当 0。
+ */
+export function quotaCoverageStats(payload: { providers: QuotaRow[] } | null): QuotaCoverageStats {
+  const rows = payload?.providers ?? [];
+  const total = rows.length;
+  const unavailable = rows.filter((r) => r.available === false).length;
+  const errors = rows.filter((r) => typeof r.error === 'string' && r.error.trim() !== '').length;
+  const available = total - unavailable;
+  const sub =
+    total === 0
+      ? '额度接口未返回来源'
+      : `可查 ${fmtInt(available)} / ${fmtInt(total)} 家 · 不可用 ${fmtInt(unavailable)} · 采集失败 ${fmtInt(errors)}`;
+  return { available, total, unavailable, errors, sub };
 }
 
 /**

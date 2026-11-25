@@ -836,7 +836,7 @@ export function createPanel(config) {
         gatewayError = err;
         // §10 回退：网关 balance 不可用时走 CLI（`gateway balance --json`）。
         try {
-          const r = await cli.runRouter(['gateway', 'balance', '--json'], { timeoutMs: 20000 });
+          const r = await cli.runRouter(['gateway', 'balance', '--json'], { timeoutMs: 45000 });
           const parsed = parseCliJson(r, '额度');
           rows = Array.isArray(parsed) ? parsed.map(toQuotaRow) : [];
           source = 'cli-fallback';

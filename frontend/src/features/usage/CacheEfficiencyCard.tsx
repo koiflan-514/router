@@ -3,8 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Empty } from '@/components/ui/empty';
 import { Progress } from '@/components/ui/progress';
 import type { UsageStats } from '@/lib/contract';
-import { DASH, fmtInt, fmtPercent } from '@/lib/format';
-import { cacheEfficiency } from './usage-model';
+import { DASH, fmtInt } from '@/lib/format';
+import { cacheEfficiency, cacheRatioText } from './usage-model';
 
 function RatioRow({
   label,
@@ -23,19 +23,20 @@ function RatioRow({
         <span className="text-muted-foreground">{label}</span>
         <span className="tabular-nums">
           {fmtInt(value)} tokens
-          <span className="ml-2 text-muted-foreground">
-            {ratio === null ? DASH : `输入 ${fmtPercent(ratio, 1)}`}
+          {/* 比例 >1 时倍数表达（缓存读取常是输入的上千倍，2169.0% 会被读成错误值）。 */}
+          <span className="ml-2 text-muted-foreground" title={`${label} Token ÷ 输入 Token`}>
+            {ratio === null ? DASH : cacheRatioText(ratio)}
           </span>
         </span>
       </div>
       {ratio === null ? (
-        <div className="text-[11px] text-muted-foreground">输入 Token 为 0，无法计算比例。</div>
+        <div className="text-[11px] text-muted-foreground">输入 Token 为 0，无法计算比例（显示 {DASH}）。</div>
       ) : (
         <div className={colorClass}>
           <Progress
             value={Math.min(100, ratio * 100)}
             aria-label={`${label}占输入 Token 比例`}
-            aria-valuetext={`${Math.round(ratio * 100)}%`}
+            aria-valuetext={cacheRatioText(ratio)}
           />
         </div>
       )}

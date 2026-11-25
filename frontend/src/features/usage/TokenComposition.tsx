@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Empty } from '@/components/ui/empty';
 import type { UsageStats } from '@/lib/contract';
 import { DASH, fmtCompact, fmtInt, fmtPercent } from '@/lib/format';
-import { cacheEfficiency, tokenBreakdown } from './usage-model';
+import { cacheEfficiency, cacheRatioText, tokenBreakdown } from './usage-model';
 
 function tooltipStyle() {
   return {
@@ -130,25 +130,26 @@ export function TokenComposition({ data }: { data: UsageStats }) {
                       style={{ width: `${cacheWriteShare * 100}%`, backgroundColor: 'var(--muted-foreground)' }}
                     />
                   </div>
+                  {/* 绝对 token 数原样保留；比例在 >1 时用倍数表达（缓存常常是输入的上千倍）。 */}
                   <ul className="flex flex-col gap-1.5 text-xs">
-                  <li className="flex items-center justify-between gap-2">
-                    <span>缓存读取</span>
-                    <span className="tabular-nums">
-                      {fmtInt(cache.read)}
-                      <span className="ml-2 text-muted-foreground">
-                        {cache.readRatio === null ? DASH : `输入 ${fmtPercent(cache.readRatio, 1)}`}
+                    <li className="flex items-center justify-between gap-2">
+                      <span>缓存读取</span>
+                      <span className="tabular-nums">
+                        {fmtInt(cache.read)}
+                        <span className="ml-2 text-muted-foreground" title="缓存读取 Token ÷ 输入 Token">
+                          {cache.readRatio === null ? DASH : cacheRatioText(cache.readRatio)}
+                        </span>
                       </span>
-                    </span>
-                  </li>
-                  <li className="flex items-center justify-between gap-2">
-                    <span>缓存写入</span>
-                    <span className="tabular-nums">
-                      {fmtInt(cache.write)}
-                      <span className="ml-2 text-muted-foreground">
-                        {cache.writeRatio === null ? DASH : `输入 ${fmtPercent(cache.writeRatio, 1)}`}
+                    </li>
+                    <li className="flex items-center justify-between gap-2">
+                      <span>缓存写入</span>
+                      <span className="tabular-nums">
+                        {fmtInt(cache.write)}
+                        <span className="ml-2 text-muted-foreground" title="缓存写入 Token ÷ 输入 Token">
+                          {cache.writeRatio === null ? DASH : cacheRatioText(cache.writeRatio)}
+                        </span>
                       </span>
-                    </span>
-                  </li>
+                    </li>
                   </ul>
                 </div>
               ) : (

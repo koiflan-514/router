@@ -23,7 +23,7 @@ test.describe('额度页', () => {
     await expect(page.getByText('29', { exact: true })).toBeVisible();
     await expect(page.getByText('天', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('凭证 / 续期天数不并入 credits 汇总。')).toBeVisible();
-    await expect(page.getByText('凭证天数单独展示，不并入 credits')).toBeVisible();
+    await expect(page.getByText('凭证剩余天数（天）独立展示，不并入 credits')).toBeVisible();
   });
 
   test('状态筛选（全部/可查/不可用/需处理）只改变可见卡片并保留计数', async ({ page }) => {

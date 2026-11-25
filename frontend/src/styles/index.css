@@ -108,6 +108,10 @@
   --provider-zcode: oklch(0.62 0.16 50);
   --provider-loomy: oklch(0.6 0.19 350);
   --provider-raccoon: oklch(0.6 0.17 25);
+  --provider-qwenwork: oklch(0.58 0.16 205);
+  --provider-dumate: oklch(0.6 0.17 120);
+  --provider-lingxi: oklch(0.6 0.15 330);
+  --provider-lobster: oklch(0.6 0.18 10);
   --provider-gateway: oklch(0.5 0.02 250);
   --provider-default: oklch(0.5 0.02 250);
 }
@@ -183,6 +187,10 @@
   --provider-zcode: oklch(0.76 0.14 55);
   --provider-loomy: oklch(0.74 0.16 350);
   --provider-raccoon: oklch(0.74 0.15 25);
+  --provider-qwenwork: oklch(0.74 0.13 205);
+  --provider-dumate: oklch(0.76 0.14 120);
+  --provider-lingxi: oklch(0.75 0.13 330);
+  --provider-lobster: oklch(0.74 0.16 10);
   --provider-gateway: oklch(0.78 0.02 250);
   --provider-default: oklch(0.78 0.02 250);
 }

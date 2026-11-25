@@ -3,6 +3,7 @@ import { usageStatsSchema } from '@/lib/contract';
 import {
   activityPoints,
   cacheEfficiency,
+  cacheRatioText,
   hasDailyTokens,
   isUsageRange,
   modelKey,
@@ -114,6 +115,34 @@ describe('usage-model 按日活动与 Token', () => {
     expect(cache?.writeRatio).toBeCloseTo(3000 / 411200, 8);
     const noCache = usageStatsSchema.parse({ tokens: { input: 10 } });
     expect(cacheEfficiency(noCache)).toBeNull();
+  });
+
+  it('缓存比例展示：>1 用倍数，≤1 用百分比，0 是真实值，input=0 显示 —', () => {
+    // 真实数据：缓存读取 2,043,581,874 / 输入 94,817,941 ≈ 21.55 → 不写成 2155.3%。
+    const huge = cacheEfficiency(
+      usageStatsSchema.parse({
+        tokens: { input: 94_817_941, cache: { read: 2_043_581_874, write: 0 } },
+      }),
+    );
+    expect(huge?.readRatio).toBeCloseTo(2_043_581_874 / 94_817_941, 10);
+    expect(cacheRatioText(huge!.readRatio)).toBe('21.6× 输入');
+    // 缓存写 0：input>0 时是真实的 0%，不是未知。
+    expect(cacheRatioText(huge!.writeRatio)).toBe('0.0% 输入');
+
+    // =1 不换成倍数口径以外的写法；<1 保留百分比。
+    expect(cacheRatioText(1)).toBe('100.0% 输入');
+    expect(cacheRatioText(0.32)).toBe('32.0% 输入');
+    expect(cacheRatioText(0)).toBe('0.0% 输入');
+    // 恰好一个数量级：≥10 只留一位小数，量级不丢。
+    expect(cacheRatioText(12.3456)).toBe('12.3× 输入');
+    expect(cacheRatioText(9.876)).toBe('9.88× 输入');
+
+    // input=0：比例为 null，不除零、不编造。
+    const noInput = usageStatsSchema.parse({ tokens: { input: 0, cache: { read: 500, write: 20 } } });
+    const zero = cacheEfficiency(noInput);
+    expect(zero?.readRatio).toBeNull();
+    expect(zero?.writeRatio).toBeNull();
+    expect(cacheRatioText(zero!.readRatio)).toBe('—');
   });
 });
 

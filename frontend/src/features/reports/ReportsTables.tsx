@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ProviderChip } from '@/components/shared/status';
 import type { ProviderStatus } from '@/lib/contract';
 import { DASH, fmtInt, fmtNumber, fmtPercent } from '@/lib/format';
-import { providerColorVar } from '@/lib/provider';
+import { providerColorVar, providerTitle } from '@/lib/provider';
 import type {
   ReportModel,
   ReportProviderRow,
@@ -73,7 +73,8 @@ export function ProviderTopTable({ rows }: { rows: ReportUsageProviderRow[] }) {
                       {row.provider === DASH ? (
                         <span className="text-muted-foreground">{DASH}</span>
                       ) : (
-                        <ProviderChip id={row.provider} />
+                        // 用量行只有 provider id：用 fallback 标题当名称，不把 id 再拼一遍（「百度搭子 dumate」）。
+                        <ProviderChip id={row.provider} title={providerTitle(row.provider)} compact />
                       )}
                       <ShareBar share={row.share} label={row.provider} />
                     </div>
@@ -129,7 +130,7 @@ export function ModelTopTable({ rows }: { rows: ModelDetail[] }) {
                     </TableCell>
                     <TableCell>
                       {row.providerID ? (
-                        <ProviderChip id={row.providerID} />
+                        <ProviderChip id={row.providerID} compact />
                       ) : (
                         <span className="text-muted-foreground">{DASH}</span>
                       )}
@@ -184,7 +185,8 @@ export function ProviderMatrixCard({ rows }: { rows: ReportProviderRow[] }) {
               {rows.map((row) => (
                 <TableRow key={row.id}>
                   <TableCell>
-                    <ProviderChip id={row.id} title={row.title} />
+                    {/* compact：只显示名称，id 进 title（明细见行详情/CSV），避免重复 id 占宽。 */}
+                    <ProviderChip id={row.id} title={row.title} compact />
                     {row.overlay ? <Badge variant="info" className="ml-2">叠加</Badge> : null}
                   </TableCell>
                   <TableCell>
@@ -379,7 +381,7 @@ export function GatewaySnapshotCard({
             <ul className="flex flex-col gap-1 text-xs">
               {top.map((row) => (
                 <li key={row.label} className="flex items-center justify-between gap-2">
-                  <ProviderChip id={row.label} />
+                  <ProviderChip id={row.label} compact />
                   <span className="tabular-nums">
                     {fmtInt(row.requests)}
                     <span className="ml-2 text-muted-foreground">
