@@ -88,8 +88,21 @@ function HealthPanel({ providers }: { providers: ProviderStatus[] }) {
   );
 }
 
-/** 额度 Top：按剩余占比排序，展示前若干条；只读，点击跳到额度页。 */
-function QuotaTopPanel({ payload, error }: { payload: QuotaPayload | null; error: boolean }) {
+/**
+ * 额度 Top：按剩余占比排序，展示前若干条；只读，点击跳到额度页。
+ *
+ * 三态：失败（error）→ 报错；加载中（loading 且无数据）→ 「正在读取额度…」；
+ * 成功但 0 行 → 空态。避免把正在加载说成「接口没有返回来源」。
+ */
+function QuotaTopPanel({
+  payload,
+  error,
+  loading,
+}: {
+  payload: QuotaPayload | null;
+  error: boolean;
+  loading?: boolean;
+}) {
   const rows = quotaTop(payload, 5);
   return (
     <Panel
@@ -106,6 +119,14 @@ function QuotaTopPanel({ payload, error }: { payload: QuotaPayload | null; error
     >
       {error ? (
         <p className="text-[11px] text-destructive">额度数据读取失败，无法排序。</p>
+      ) : loading && rows.length === 0 ? (
+        <div
+          role="status"
+          data-quota-state="loading"
+          className="flex h-[64px] items-center rounded-md border border-dashed border-stroke-2 bg-surface-2/40 px-3 text-[11px] text-text-tertiary"
+        >
+          正在读取额度…
+        </div>
       ) : rows.length === 0 ? (
         <Empty size="compact" title="没有额度数据" description="额度接口尚未返回任何来源。" />
       ) : (
@@ -293,6 +314,7 @@ export function OverviewAside({
   providers,
   quota,
   quotaError,
+  quotaLoading,
   usage,
   usageError,
   usageLoading,
@@ -301,6 +323,8 @@ export function OverviewAside({
   providers: ProviderStatus[];
   quota: QuotaPayload | null;
   quotaError: boolean;
+  /** `/api/quota` 首次加载中：额度面板显「正在读取额度…」而不是空态。 */
+  quotaLoading?: boolean;
   usage: UsageStats | null;
   /** `/api/usage` 的错误消息；非空时右栏显式报错，不再显示「没有 activity」。 */
   usageError?: string | null;
@@ -310,7 +334,7 @@ export function OverviewAside({
   return (
     <aside aria-label="健康度与待处理事项" className="flex flex-col gap-3">
       <HealthPanel providers={providers} />
-      <QuotaTopPanel payload={quota} error={quotaError} />
+      <QuotaTopPanel payload={quota} error={quotaError} loading={quotaLoading} />
       <UsageTrendPanel usage={usage} error={usageError} loading={usageLoading} />
       <AttentionPanel providers={providers} onSelect={onSelect} />
     </aside>

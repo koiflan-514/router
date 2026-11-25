@@ -129,7 +129,12 @@ export function OverviewPage() {
 
       <DataSourceBar sources={sources} />
 
-      <OverviewKpiTiles providers={providerList} quota={quota.data} />
+      <OverviewKpiTiles
+        providers={providerList}
+        quota={quota.data}
+        quotaLoading={quota.loading}
+        quotaError={Boolean(quota.error)}
+      />
 
       <DataState res={providers} loadingLabel="正在读取 provider 状态…" isEmpty={(d) => d.length === 0} empty={null}>
         {(data) => <TopologyFlow providers={data} />}
@@ -179,6 +184,7 @@ export function OverviewPage() {
                         onSort={onSort}
                         onSelect={(id) => patch({ provider: id, panel: 'provider' })}
                         selectedId={providerParam}
+                        quotaLoading={quota.loading}
                       />
                     ) : (
                       <Empty
@@ -218,6 +224,7 @@ export function OverviewPage() {
           providers={providerList}
           quota={quota.data}
           quotaError={Boolean(quota.error)}
+          quotaLoading={quota.loading}
           usage={usage.data}
           usageError={usage.error?.message ?? null}
           usageLoading={usage.loading}

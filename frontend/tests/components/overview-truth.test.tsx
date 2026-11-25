@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ProviderTable } from '@/features/overview/ProviderTable';
+import { OverviewKpiTiles } from '@/features/overview/OverviewKpi';
 import { OverviewAside } from '@/features/overview/OverviewAside';
 import type { QuotaPayload } from '@/lib/query';
 import { providerStatusSchema, usageStatsSchema, type ProviderStatus } from '@/lib/contract';
@@ -42,7 +43,7 @@ function p(partial: Record<string, unknown>): ProviderStatus {
   });
 }
 
-function renderTable(list: ProviderStatus[]) {
+function renderTable(list: ProviderStatus[], extra: { quotaLoading?: boolean } = {}) {
   return render(
     <TooltipProvider delayDuration={0}>
       <ProviderTable
@@ -52,6 +53,7 @@ function renderTable(list: ProviderStatus[]) {
         sortDir="asc"
         onSort={() => {}}
         onSelect={() => {}}
+        {...extra}
       />
     </TooltipProvider>,
   );
@@ -126,5 +128,48 @@ describe('总览右栏：近 7 天用量的三种状态', () => {
     );
     expect(screen.getByText(/没有 activity 序列，不绘制趋势线。/)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('总览额度：加载中不再被说成「接口未返回来源」', () => {
+  it('加载中：KPI 副标题与右栏都显「正在读取额度…」，不出现空态/失败文案', () => {
+    renderAside(
+      <div>
+        <OverviewKpiTiles providers={[p({})]} quota={null} quotaLoading quotaError={false} />
+        <OverviewAside {...baseAside} usage={null} quotaLoading />
+      </div>,
+    );
+    // KPI 副标题 + 右栏面板各一处。
+    expect(screen.getAllByText('正在读取额度…')).toHaveLength(2);
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('正在读取额度…');
+    expect(screen.queryByText('额度接口未返回来源')).not.toBeInTheDocument();
+    expect(screen.queryByText(/没有额度数据/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/额度数据读取失败/)).not.toBeInTheDocument();
+  });
+
+  it('加载中：KPI 数值显「…」，加载结束且无数据时回落为 — 与空态文案', () => {
+    const kpi = render(
+      <OverviewKpiTiles providers={[p({})]} quota={null} quotaLoading quotaError={false} />,
+    );
+    const claimCard = screen.getByRole('group', { name: '额度可领取' });
+    expect(claimCard.textContent).toContain('…');
+    kpi.unmount();
+    render(<OverviewKpiTiles providers={[p({})]} quota={null} />);
+    expect(screen.getByRole('group', { name: '额度可领取' }).textContent).not.toContain('…');
+    expect(screen.getByText('额度接口未返回来源')).toBeInTheDocument();
+  });
+
+  it('加载中：矩阵额度列显示灰字「读取中」，不显示 —', () => {
+    const { container } = renderTable([p({ id: 'trae-local', title: 'Trae' })], { quotaLoading: true });
+    expect(screen.getByText('读取中')).toBeInTheDocument();
+    expect(screen.getByText('读取中')).toHaveAttribute('title', '额度接口尚未返回；— 不代表没有额度');
+    // 额度单元格里不再出现单独的 `—` 占位。
+    expect(container.querySelector('[data-quota-state="loading"]')?.textContent).toBe('读取中');
+  });
+
+  it('非加载中：额度列保持既有 — 占位（语义不变）', () => {
+    renderTable([p({ id: 'trae-local', title: 'Trae' })]);
+    expect(screen.queryByText('读取中')).not.toBeInTheDocument();
   });
 });

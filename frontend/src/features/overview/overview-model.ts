@@ -361,17 +361,25 @@ export interface QuotaCoverageStats {
  *
  * 只数 `quota.providers` 行：`available` 与 `error` 都是后端字段，
  * 不做跨厂商求和，也不把「无数据」当 0。
+ *
+ * `sub` 区分三态，避免把「正在加载」说成「接口没有返回来源」：
+ * 加载中（无数据）→ 读取中；失败且无数据 → 读取失败；成功但 0 行 → 空；否则覆盖计数。
  */
-export function quotaCoverageStats(payload: { providers: QuotaRow[] } | null): QuotaCoverageStats {
+export function quotaCoverageStats(
+  payload: { providers: QuotaRow[] } | null,
+  opts: { loading?: boolean; error?: boolean } = {},
+): QuotaCoverageStats {
   const rows = payload?.providers ?? [];
   const total = rows.length;
   const unavailable = rows.filter((r) => r.available === false).length;
   const errors = rows.filter((r) => typeof r.error === 'string' && r.error.trim() !== '').length;
   const available = total - unavailable;
-  const sub =
-    total === 0
-      ? '额度接口未返回来源'
-      : `可查 ${fmtInt(available)} / ${fmtInt(total)} 家 · 不可用 ${fmtInt(unavailable)} · 采集失败 ${fmtInt(errors)}`;
+  let sub: string;
+  if (opts.loading && payload === null) sub = '正在读取额度…';
+  else if (opts.error && total === 0) sub = '额度数据读取失败';
+  else if (total === 0) sub = '额度接口未返回来源';
+  else
+    sub = `可查 ${fmtInt(available)} / ${fmtInt(total)} 家 · 不可用 ${fmtInt(unavailable)} · 采集失败 ${fmtInt(errors)}`;
   return { available, total, unavailable, errors, sub };
 }
 

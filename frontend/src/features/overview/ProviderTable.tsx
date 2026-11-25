@@ -161,9 +161,24 @@ function ClientCell({ p }: { p: ProviderStatus }) {
  * 行高固定为「一行摘要 + 一条 4px 进度条」，摘要过长以省略号截断（完整文本在 `title`），
  * 这样矩阵里所有行等高，也不会把最后一列撑出容器。
  */
-function QuotaCell({ row }: { row: Parameters<typeof quotaBarFor>[0] }) {
+function QuotaCell({ row, loading = false }: { row: Parameters<typeof quotaBarFor>[0]; loading?: boolean }) {
   const text = quotaSummaryText(row);
   const bar = quotaBarFor(row);
+  // 加载中且该来源尚无行：显示灰字「读取中」，避免 `—` 被读成「确实没有额度」。
+  if (loading && !row) {
+    return (
+      <div className="flex h-7 min-w-[2.5rem] max-w-[14rem] flex-col justify-center gap-1">
+        <span
+          className="block overflow-hidden text-[11px] leading-4 text-ellipsis whitespace-nowrap text-text-tertiary"
+          title="额度接口尚未返回；— 不代表没有额度"
+          data-quota-state="loading"
+        >
+          读取中
+        </span>
+        <span aria-hidden className="block h-1" />
+      </div>
+    );
+  }
   return (
     <div className="flex h-7 min-w-[2.5rem] max-w-[14rem] flex-col justify-center gap-1">
       <span className="block overflow-hidden text-[11px] leading-4 text-ellipsis whitespace-nowrap text-text-secondary" title={text}>
@@ -203,6 +218,7 @@ export function ProviderTable({
   onSort,
   onSelect,
   selectedId,
+  quotaLoading = false,
 }: {
   providers: ProviderStatus[];
   quotaIndex: QuotaIndex;
@@ -211,6 +227,8 @@ export function ProviderTable({
   onSort: (key: SortKey) => void;
   onSelect: (id: string) => void;
   selectedId?: string;
+  /** `/api/quota` 首次加载中：无额度行的来源显示「读取中」，不改既有 `—` 语义。 */
+  quotaLoading?: boolean;
 }) {
   return (
     <Table containerProps={{ 'aria-label': 'provider 状态矩阵，可横向滚动' }}>
@@ -305,7 +323,7 @@ export function ProviderTable({
                 {p.overlay ? (
                   <span className="flex h-7 items-center text-text-tertiary">{DASH}</span>
                 ) : (
-                  <QuotaCell row={quotaIndex.get(p.id)} />
+                  <QuotaCell row={quotaIndex.get(p.id)} loading={quotaLoading} />
                 )}
               </TableCell>
             </TableRow>

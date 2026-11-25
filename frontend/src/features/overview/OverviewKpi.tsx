@@ -15,13 +15,19 @@ import { claimableCount, deriveSummary, quotaCoverageStats } from './overview-mo
 export function OverviewKpiTiles({
   providers,
   quota,
+  quotaLoading = false,
+  quotaError = false,
 }: {
   providers: ProviderStatus[];
   quota: QuotaPayload | null;
+  /** `/api/quota` 首次加载中（真实模式可达 ~24s）：副标题显「正在读取额度…」，数值显 `…`。 */
+  quotaLoading?: boolean;
+  quotaError?: boolean;
 }) {
   const s = deriveSummary(providers);
   const claimable = claimableCount(quota);
-  const coverage = quotaCoverageStats(quota);
+  const quotaPending = quotaLoading && claimable === 0;
+  const coverage = quotaCoverageStats(quota, { loading: quotaLoading, error: quotaError });
 
   return (
     <section aria-label="关键指标" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -57,10 +63,10 @@ export function OverviewKpiTiles({
       />
       <MetricCard
         label="额度可领取"
-        value={claimable > 0 ? fmtInt(claimable) : DASH}
+        value={quotaPending ? '…' : claimable > 0 ? fmtInt(claimable) : DASH}
         sub={coverage.sub}
         hint="可领取来自后端 checkin；不推断历史趋势"
-        tone={claimable > 0 ? 'info' : 'default'}
+        tone={quotaLoading ? 'default' : claimable > 0 ? 'info' : 'default'}
         accessory={<CheckCheck aria-hidden />}
       />
     </section>
