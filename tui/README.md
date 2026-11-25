@@ -17,13 +17,13 @@
 - **视觉**：五行外壳（顶栏/页签/主内容/上下文摘要/键位），三档响应式（≥120 / 80–119 / <80）；语义色 `Tone`、图标 `Glyphs`、`--ascii` 全 7-bit、`--no-color` 退化为 BOLD/DIM/REVERSED，CJK 按显示宽度对齐。
 - **服务**：启动、停止、停止但保留客户端、重启、仅启用、关闭、全部启用/关闭和同步。
 - **用量分析**：OpenCode 真实会话/步骤 KPI、Token 构成横条、每日活动 sparkline、工具成功率 gauge、模型/Provider 聚合与行内 steps 占比；支持 24h/7d/30d/全部历史与 `s` 循环排序。
-- **额度**：按 provider/账号展示余额、总量、单位、`█░` 进度条、重置日、可领取状态和数据时间；无总量显示 `────`，不编造 0，不跨厂商汇总。
+- **额度**：按 provider/账号展示余额、总量、单位、`█░` 进度条、重置日、可领取状态和数据时间；`days` 单位余额带 `d` 后缀（如 `29d / 39d / 344d`），总量为 `None`/`0`/负数/NaN 时显示 `—`（窄表留空），进度只在 `total>0` 时绘制；不编造 0，不跨厂商汇总。
 - **账号**：账号池、当前生效、轮询状态、dry-run、切换、恢复整池、添加账号和登录。
 - **日志**：选择 provider、过滤、暂停/跟随、调整尾部行数、清屏和操作输出。
 - **诊断**：环境、`doctor`、无试打健康检查和经确认的真实试打。
 - **安全**：写操作确认、默认取消、写任务互斥、只读模式、命令参数白名单、日志控制序列清理和凭据脱敏。
 - **演示**：`--demo` 使用匿名内存数据，不需要 Node、凭证、网络或本机服务。
-- **测试**：`cargo test` → **98 unit + 1 demo PTY = 99 passed，0 failed**；unit 侧 4 ignored（2 个真实只读 + 2 个截图 dump），PTY 侧另有 2 个 live ignored。`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo build --release` 均通过。新增 44 个渲染/交互测试，覆盖 120×40、100×30、80×24、60×20 × 7 页面、空数据、后端失败、`--ascii`/`--no-color`。
+- **测试**：`cargo test` → **103 unit + 1 demo PTY = 104 passed，0 failed**；unit 4 ignored（2 个真实只读 + 2 个截图 dump），PTY 侧另有 2 个 live ignored。`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo build --release` 均通过。渲染/交互测试覆盖 120×40、100×30、80×24、60×20 × 7 页面、空数据、后端失败、`--ascii`/`--no-color`，以及 days/0 总量、14 家 provider 形状与帮助弹窗。
 
 ## 运行
 
@@ -106,7 +106,9 @@ cargo build --release
 
 ```bash
 ROUTER_TUI_TEST_ROOT=/path/to/router cargo test local_readonly_smoke -- --ignored --nocapture
+ROUTER_TUI_TEST_ROOT=/path/to/router cargo test local_usage_smoke -- --ignored --nocapture
 ROUTER_TUI_TEST_ROOT=/path/to/router cargo test --test pty_smoke live_readonly_starts_in_a_pty_and_reads_providers -- --ignored --nocapture
+ROUTER_TUI_TEST_ROOT=/path/to/router cargo test --test pty_smoke live_usage_page_reads_real_model_stats -- --ignored --nocapture
 ```
 
 Windows PowerShell：
@@ -128,7 +130,7 @@ cargo build
 
 ## 当前限制
 
-- WorkBuddy 没有 credits 余额接口；额度页显示的是 access/refresh token 的有效天数，详情包含 UTC 绝对到期时间。国际版两个日期相同是上游 session 的真实值。
+- WorkBuddy 没有 credits 余额接口；额度页显示的是 access/refresh token 的有效天数（`29d / 39d / 344d` 这类 `d` 后缀），详情包含 UTC 绝对到期时间；总量未知时显示 `—`，不画进度。国际版两个日期相同是上游 session 的真实值。
 - 额度采集器把 Trae 的 provider 写成 `trae`，而 provider 表用 `trae-local`；TUI 在解析时统一成 `trae-local`，所以额度列、`4` 跳转和详情都能对上。
 - 签到尚无统一的 Node 命令；界面会显示可领取状态，但不会执行真实领取。已停用账号即使未签到也不计入顶部「可领取」，避免给出领了也不会被调度的数字。
 - 健康检查目前展示既有 `health.mjs` 的清理后文本，结构化健康 JSON 尚未接入。
@@ -154,6 +156,10 @@ cargo build
 | `zcode` | ZCode（Z.ai） | 20131 | 服务、固定凭据/桌面端凭据、套餐额度（M tok）、模型 |
 | `loomy` | Loomy（讯飞） | 8791 | 服务、单账号、登录态、积分（credits）、模型倍率 |
 | `raccoon` | 商汤小浣熊 | 8793 | 服务、单账号、登录态、积分（credits）、模型倍率 |
+| `qwenwork` | 千问办公 | 8794 | 服务、单账号、MaaS key、双方言、模型 |
+| `dumate` | 百度搭子 | 8795 | 服务、单账号、登录态、模型 |
+| `lingxi` | WPS 灵犀 | 8796 | 服务、单账号、智点余额、对话模型（不吐 tool_calls） |
+| `lobster` | 有道龙虾（LobsterAI） | 8797 | 服务、积分包、签到、模型倍率 |
 | `gateway` | 统一网关（叠加层） | 8785 | 服务、进程、模型并集；不参与 on/off |
 
 `gateway` 是叠加层，不是第十四家反代：`router.mjs list` 把它的「开关」直接取进程状态，TUI 因此显示为**叠加**，不计入「启用 x/y」，也不会报配置漂移。启停用它自己的命令：

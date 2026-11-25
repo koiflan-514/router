@@ -18,6 +18,7 @@ fn demo_starts_in_a_pty_and_quits_cleanly() {
 fn live_usage_page_reads_real_model_stats() {
     let root = std::env::var("ROUTER_TUI_TEST_ROOT")
         .expect("set ROUTER_TUI_TEST_ROOT to the router checkout for this ignored test");
+    // 120x40 才会显示 Provider 列；80x24 的窄表只有 Model/Steps，无法验证 provider。
     let output = run_tui_with_page(
         &["--router-root", &root, "--read-only", "--no-color"],
         b'7',
@@ -39,19 +40,24 @@ fn live_readonly_starts_in_a_pty_and_reads_providers() {
 }
 
 fn run_tui(args: &[&str], expected: &[&[u8]]) -> Vec<u8> {
-    run_tui_internal(args, expected, None)
+    run_tui_internal(args, expected, None, (80, 24))
 }
 
 fn run_tui_with_page(args: &[&str], page: u8, expected: &[&[u8]]) -> Vec<u8> {
-    run_tui_internal(args, expected, Some(page))
+    run_tui_internal(args, expected, Some(page), (120, 40))
 }
 
-fn run_tui_internal(args: &[&str], expected: &[&[u8]], page: Option<u8>) -> Vec<u8> {
+fn run_tui_internal(
+    args: &[&str],
+    expected: &[&[u8]],
+    page: Option<u8>,
+    (cols, rows): (u16, u16),
+) -> Vec<u8> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
-            rows: 24,
-            cols: 80,
+            rows,
+            cols,
             pixel_width: 0,
             pixel_height: 0,
         })

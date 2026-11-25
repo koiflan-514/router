@@ -1429,6 +1429,7 @@ impl App {
                 .map(crate::domain::format_number)
                 .unwrap_or_else(|| "—".into()),
             line.total
+                .filter(|value| value.is_finite() && *value > 0.0)
                 .map(crate::domain::format_number)
                 .unwrap_or_else(|| "—".into()),
             line.unit.if_empty("—"),

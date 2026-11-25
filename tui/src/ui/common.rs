@@ -7,7 +7,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use ratatui::text::{Line, Span};
 
 use crate::app::{App, Page, QuotaLine};
-use crate::domain::{format_percent, format_quota_remaining, AuthState, HealthLevel, Provider};
+use crate::domain::{format_quota_remaining, AuthState, HealthLevel, Provider};
 use crate::redact::sanitize_text;
 
 use super::theme::{fit_width, safe_ratio, Theme, Tone};
@@ -670,12 +670,12 @@ pub fn account_wire(app: &App) -> String {
         .unwrap_or_else(|| "—".into())
 }
 
-/// 数量与比例的紧凑文案，例如 `116/120 · 96.7%`。
-pub fn success_label(success: Option<f64>, succeeded: u64, calls: u64) -> String {
+/// 数量的紧凑文案，例如 `116/120`。成功率已经由 KPI 主数字展示，detail 不再重复百分比。
+pub fn success_label(succeeded: u64, calls: u64) -> String {
     if calls == 0 {
         "无调用".into()
     } else {
-        format!("{succeeded}/{calls} · {}", format_percent(success))
+        format!("{succeeded}/{calls}")
     }
 }
 
@@ -709,7 +709,9 @@ mod tests {
 
     #[test]
     fn success_label_handles_no_calls() {
-        assert_eq!(success_label(None, 0, 0), "无调用");
-        assert!(success_label(Some(0.5), 5, 10).contains("50.0%"));
+        assert_eq!(success_label(0, 0), "无调用");
+        assert_eq!(success_label(5, 10), "5/10");
+        // 百分比由 KPI 主数字负责，detail 不再重复。
+        assert!(!success_label(5, 10).contains('%'));
     }
 }

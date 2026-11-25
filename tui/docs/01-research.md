@@ -35,7 +35,7 @@
 不直接照搬：
 
 - 当前 router 不是 OpenRouter 式的实时智能路由层，没有统一请求分析数据库。
-- 当前八家厂商的 credits 不是统一货币，不能合并成 OpenRouter 式 Spend。
+- 当前十三家厂商的 credits 不是统一货币，不能合并成 OpenRouter 式 Spend。
 
 ### 2.2 LiteLLM Admin UI
 
@@ -166,7 +166,7 @@
 
 根目录 [`router.mjs`](../../router.mjs) 已提供：
 
-- `list --json`：八家 provider 的开关、运行、PID、端口、模型数、opencode 和认证描述。
+- `list --json`：十三家 provider 的开关、运行、PID、端口、模型数、opencode 和认证描述。
 - `account --json`：账号 key、名称、启用、当前生效、详情和是否可切换。
 - `up`、`down`、`restart`：进程生命周期。
 - `on`、`off`、`all`、`none`：启用选择、进程和 opencode 联动。
@@ -199,7 +199,7 @@
 
 | 目标 | 当前数据 | 设计处理 |
 |---|---|---|
-| 八家服务状态 | 已有 JSON | MVP 直接接入 |
+| 十三家服务状态 | 已有 JSON | MVP 直接接入 |
 | 账号池与当前账号 | 已有 JSON | MVP 直接接入 |
 | 积分与签到 | 已有 JSON，能力因 provider 而异 | 分来源展示，按能力提供操作 |
 | 凭证状态 | 有布尔值和描述文本 | 补充结构化状态和到期时间，避免解析文案 |
@@ -227,4 +227,4 @@ MVP 只显示能由当前 CLI、状态文件、本地网关或 OpenCode 官方�
 
 ## 6. 调研结论
 
-最适合本项目的是“LiteLLM 的管理分面 + OpenRouter 的 provider 视角 + Vercel 的日志交互 + 本地现有运维语义”，而不是建设一套新的 AI Gateway。首版的成功标准是让八家本地反代**看得清、控得准、出错能定位**，而不是图表数量。
+最适合本项目的是“LiteLLM 的管理分面 + OpenRouter 的 provider 视角 + Vercel 的日志交互 + 本地现有运维语义”，而不是建设一套新的 AI Gateway。首版的成功标准是让十三家本地反代**看得清、控得准、出错能定位**，而不是图表数量。

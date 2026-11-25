@@ -91,7 +91,7 @@ fn render_kpis(frame: &mut Frame, area: Rect, app: &App, theme: Theme, breakpoin
                 Tone::Success
             },
         )
-        .detail(success_label(success, succeeded, calls))
+        .detail(success_label(succeeded, calls))
         .ratio(success.unwrap_or(0.0)),
     ];
     if breakpoint.is_compact() {

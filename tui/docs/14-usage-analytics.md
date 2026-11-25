@@ -140,6 +140,7 @@ OpenCode CLI 负责服务发现与认证上下文，TUI 不猜测服务端口或
 标准高度下由四部分组成：
 
 1. **KPI 卡**：会话/步骤、Token、成本、活跃/连续、工具成功率；窄屏截断到 3–4 张。
+   工具成功率主数字已是百分比，副行只写成功/调用数（如 `116/120`），不重复 `116/120 · 96.7%`。
 2. **每日活动 Sparkline**：按 OpenCode `activity` 绘制，带时间范围、峰值与上报成本。
 3. **Token 构成横条 + 工具成功率矩形环**：输入/输出/推理分段，缓存读写另计；成功率带图例。
 4. **模型/Provider 表**：模型、Provider、Steps、输入、输出、推理、缓存读取、成本、行内 steps 占比。
@@ -168,7 +169,8 @@ OpenCode CLI 负责服务发现与认证上下文，TUI 不猜测服务端口或
 
 - 颜色只来自 `Tone` 语义层（Accent/Success/Warning/Error/Info/Muted/Normal），页面不直接写 `Color`。
 - Provider 使用稳定分类色：CodeArts 紫、Qoder 国内青、Qoder 国际蓝、Trae 绿、WorkBuddy 黄、
-  WorkBuddy 国际浅紫、ZCode 橙、Loomy 洋红、小浣熊红、Gateway 中性。
+  WorkBuddy 国际浅紫、ZCode 橙、Loomy 洋红、小浣熊红、千问办公浅绿、Gateway 中性。
+  百度搭子、WPS 灵犀、有道龙虾暂回退默认前景色（见 [13 实现状态](13-implementation-status.md) 已知差距）。
 - KPI 卡、Sparkline、Token 横条、矩形环和表格使用统一圆角/边框；行内 steps 占比条使用 `█░`。
 - 表头使用低亮度底色，选中行使用高对比前景与背景（无色模式用 REVERSED）。
 - 状态不仅靠颜色：数值、文字、单位和图例始终存在。
@@ -183,7 +185,7 @@ OpenCode CLI 负责服务发现与认证上下文，TUI 不猜测服务端口或
 - 只有 `--demo` 使用匿名虚拟用量，且明确标记 DEMO。
 - `steps` 永远不显示为“请求数”。
 - `cost=0` 是 API 返回值，不解释为“没有消耗积分”。
-- 工具成功率不代替模型请求成功率。
+- 工具成功率不代替模型请求成功率；主数字是百分比，副行不再重复百分比。
 
 ## 7. 验证
 

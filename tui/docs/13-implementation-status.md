@@ -16,6 +16,7 @@
 | P4 测试与发布 | 基本完成 | Windows/Linux 原生构建与 PTY、真实只读 UI；正式发布包待做 |
 | P5 用量分析与视觉升级 | 完成 | OpenCode 统计、KPI、活动图、模型聚合、分类色与圆角面板 |
 | P6 UI 模块化与响应式重构 | 完成（2026-11-25） | `ui.rs` 拆分模块树、五行外壳、三档断点、语义色/ASCII、44 个新测试 |
+| P7 provider 覆盖与额度语义 | 完成（2026-11-25） | 14 条真实形状、4 家新 provider、days/0 总量、KPI 去重、真实只读 PTY |
 
 ## 2. 已交付能力
 
@@ -54,10 +55,13 @@
 - 账号页接入后端 `health.level/notes`（如「积分为 0，选中会报额度不足」），error 级排到说明前面。
 - `\\?\D:\...` 前缀不再出现在标题栏与诊断页。
 
-真实只读冒烟结果（历史记录，当前 provider 数以 `node router.mjs list` 为准）：
+真实只读验证（2026-11-25，本机；provider 数以 `node router.mjs list` 为准）：
 
 ```text
-read-only smoke: 8 providers, 8 account groups, 8 quota rows, logs readable
+live_readonly_starts_in_a_pty_and_reads_providers ... ok
+live_usage_page_reads_real_model_stats ... ok
+node router.mjs list --json → 14 providers（13 反代 + gateway），TUI 显示 8/14
+WorkBuddy quota → 9d / 39d / 344d，total = —（不画进度）
 ```
 
 该测试只读取本机状态和额度，不启动/停止 provider，不写配置，不签到，不真实试打。
@@ -98,17 +102,19 @@ read-only smoke: 8 providers, 8 account groups, 8 quota rows, logs readable
 
 - `cargo fmt --check`：通过。
 - `cargo clippy --all-targets -- -D warnings`：通过（0 warning）。
-- `cargo test`：**98 unit + 1 demo PTY = 99 passed，0 failed**。
+- `cargo test`：**103 unit + 1 demo PTY = 104 passed，0 failed**。
 - unit 侧 4 ignored：2 个真实只读冒烟（`local_readonly_smoke` / `local_usage_smoke`）+ 2 个截图 dump（`dump_screens` / `dump_ascii_screens`）；PTY 侧另有 2 个 live ignored，共 6 个 ignored。
 - `cargo test dump_screens -- --ignored --nocapture`：手工 dump 7 页 × 4 尺寸。
 - `cargo build --release`：通过。
 - TestBackend：七页渲染、KPI 卡、Sparkline、Token 横条、gauge、空数据/后端失败、
   `--ascii`/`--no-color`，120×40 / 100×30 / 80×24 / 60×20，99 列确认弹窗。
-- 新增 44 个测试，覆盖尺寸矩阵、空数据、后端失败、ASCII 与无色模式。
+- 本轮新增 days 单位与 0 总量、14 条真实 provider 形状（含 4 家长 CJK 标题）、帮助弹窗、
+  `day_units_are_recognized`、`zero_or_negative_totals_are_not_rendered` 等测试。
+- 渲染/交互测试覆盖尺寸矩阵、空数据、后端失败、ASCII 与无色模式。
 
 测试覆盖：
 
-- Auth、额度和空/未知区别。
+- Auth、额度和空/未知区别；days 余额带 `d` 后缀、总量 0/负数/NaN 显示 `—`、进度不画。
 - 网关叠加层语义：不计入开关、不报漂移、`o`/`x` 被拒绝；`none` 停进程但保留 gateway 的 opencode provider。
 - 额度 provider id 归一（`trae` → `trae-local`）、额度耗尽优先于签到说明、签到可领取推断。
 - 账号 `health.level/notes` 解析（未知 level 不炸整行）。
@@ -140,6 +146,7 @@ read-only smoke: 8 providers, 8 account groups, 8 quota rows, logs readable
 9. 环形仪表是 buffer 自绘**矩形环**，不是真圆；换取 ASCII/无色下稳定。
 10. 登录在 Linux 的实际 provider 命令支持未完成真实验收。
 11. 未生成正式发布 zip/tar 和校验文件。
+12. 新增 provider 的分类色未全部落地：`qwenwork` 已映射浅绿，`dumate`/`lingxi`/`lobster` 暂回退默认前景色。
 
 ### 明确未做
 

@@ -7,16 +7,23 @@
 
 ### Provider
 
-一个模型来源及其本地接入实例。当前八个 ID：
+一个模型来源及其本地接入实例。当前十三家 ID：
 
 - `qoder-cn`
 - `qoder`
 - `trae-local`
 - `codearts`
 - `zcode`
+- `loomy`
+- `raccoon`
+- `qwenwork`
+- `dumate`
+- `lingxi`
+- `lobster`
 - `workbuddy`
 - `workbuddy-global`
-- `loomy`
+
+`gateway` 是叠加层，不是第十四家反代。
 
 Provider 是路由和控制对象，不等于模型、账号或厂商本身。文档中避免混用“渠道”“线路”“模型源”。
 
@@ -124,7 +131,7 @@ WorkBuddy 等账号池中的凭证槽位。Slot key 不是凭证内容。
 
 ### Spend
 
-真实货币或明确计费口径下的费用。当前八家 credits 余额不等于 Spend；没有可靠数据时 TUI 不显示 Spend。
+真实货币或明确计费口径下的费用。当前十三家 credits 余额不等于 Spend；没有可靠数据时 TUI 不显示 Spend。
 
 ### Remaining / Total / Used
 
@@ -148,7 +155,9 @@ WorkBuddy 没有公开 credits 余额接口。现有 `quota.js` 读取生效 ses
 
 ### `days`
 
-WorkBuddy 等来源的凭证有效天数，不是 credits，不能加入积分合计。
+WorkBuddy 等来源的凭证有效天数，不是 credits，不能加入积分合计。余额展示带 `d` 后缀
+（如 `29d / 39d / 344d`），避免与 credits 数字混淆；该单位通常没有总量，总量为
+`None`/`0`/负数/NaN 时显示 `—`，进度只在 `total > 0` 时绘制。
 
 ### Check-in
 

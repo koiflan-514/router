@@ -248,6 +248,9 @@ fn usage_kpi_bar_includes_tool_success_meter() {
     let compact = compact(&output);
     assert!(compact.contains("工具成功率"), "{compact}");
     assert!(compact.contains("96.7%"), "{compact}");
+    // KPI 主数字已经显示百分比，detail 只保留成功/总数，避免重复。
+    assert!(compact.contains("116/120"), "{compact}");
+    assert!(!compact.contains("116/120·96.7%"), "{compact}");
     // KPI 条下方的 gauge 由方块字符组成，宽度应接近整条 KPI 的宽度。
     assert!(
         output.contains('█') || output.contains('░'),
@@ -279,6 +282,144 @@ fn credits_page_shows_exhausted_and_no_long_upstream_text() {
     let compact = compact(&output);
     assert!(compact.contains("额度已耗尽"), "{compact}");
     assert!(!compact.contains("该区域没有签到接口"), "{compact}");
+}
+
+#[test]
+fn credits_page_days_rows_show_unit_suffix_and_no_zero_total() {
+    let mut app = test_app();
+    app.page = Page::Credits;
+    for (width, height) in [(120, 40), (80, 24)] {
+        let output = render(&mut app, width, height);
+        let rows = output
+            .lines()
+            .map(compact)
+            .filter(|line| line.contains("WorkBuddy"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows.len(),
+            3,
+            "expected three WorkBuddy validity rows at {width}x{height}:\n{output}"
+        );
+        let first = rows
+            .iter()
+            .find(|line| line.contains("29d"))
+            .unwrap_or_else(|| panic!("29d row missing at {width}x{height}: {rows:?}"));
+        assert!(
+            first.contains("29d"),
+            "days balance should carry a `d` suffix at {width}x{height}: {first:?}"
+        );
+        assert!(
+            !first.contains("29/0"),
+            "days row must not look like `29 / 0` at {width}x{height}: {first:?}"
+        );
+        assert!(
+            rows.iter().any(|line| line.contains("80d")),
+            "the second validity bucket should also keep its days suffix at {width}x{height}: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|line| line.contains("364d")),
+            "the global validity bucket should also keep its days suffix at {width}x{height}: {rows:?}"
+        );
+        // 没有总量时进度条只画占位线，不伪造 0% 进度。
+        assert!(
+            first.contains("────────"),
+            "days row should keep the empty meter at {width}x{height}: {first:?}"
+        );
+        if width >= 100 {
+            // 宽表总量列用「—」表示未知，而不是 0。
+            assert!(
+                first.contains('—'),
+                "wide days row should show an em dash for unknown total at {width}x{height}: {first:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn real_provider_shapes_render_all_fourteen_with_safe_cjk_titles() {
+    let mut app = test_app();
+    let snapshot = app.providers.data.as_mut().expect("fixture providers");
+    let template = snapshot
+        .providers
+        .iter()
+        .find(|provider| provider.id == "workbuddy")
+        .cloned()
+        .expect("workbuddy template");
+    for (id, title, port) in [
+        ("qwenwork", "千问办公", 8794),
+        ("dumate", "百度搭子", 8795),
+        ("lingxi", "WPS 灵犀", 8796),
+        ("lobster", "有道龙虾（LobsterAI）", 8797),
+    ] {
+        let mut provider = template.clone();
+        provider.id = id.into();
+        provider.title = title.into();
+        provider.port = port;
+        provider.pids = vec![port as u32 + 100];
+        snapshot.providers.push(provider);
+    }
+    assert_eq!(snapshot.providers.len(), 14);
+    assert!(snapshot.providers.iter().any(|p| p.id == "gateway"));
+
+    for (width, height) in [(120, 40), (80, 24)] {
+        for page in [Page::Overview, Page::Providers, Page::Credits] {
+            app.page = page;
+            app.provider_cursor = app.providers.data.as_ref().unwrap().providers.len() - 1;
+            let output = render(&mut app, width, height);
+            assert!(
+                !output.contains('\u{fffd}'),
+                "CJK truncation produced a replacement char on {page:?} at {width}x{height}"
+            );
+            assert!(
+                !output.contains('\x1b'),
+                "escape leaked on {page:?} at {width}x{height}"
+            );
+        }
+
+        // 总览/服务页在两种尺寸下都保留关键列。
+        app.page = Page::Overview;
+        let overview = compact(&render(&mut app, width, height));
+        for header in ["Provider", "开关", "进程", "认证"] {
+            assert!(
+                overview.contains(header),
+                "overview lost `{header}` at {width}x{height}: {overview}"
+            );
+        }
+        app.page = Page::Providers;
+        let providers = compact(&render(&mut app, width, height));
+        for header in ["Provider", "开关", "进程", "认证"] {
+            assert!(
+                providers.contains(header),
+                "providers lost `{header}` at {width}x{height}: {providers}"
+            );
+        }
+        // 长标题按显示列截断，不会出现半个汉字或多吐半截括号。
+        assert!(
+            providers.contains("有道龙虾（Lobst…"),
+            "expected display-width truncation with ellipsis at {width}x{height}:\n{providers}"
+        );
+        assert!(
+            !providers.contains("有道龙虾（LobsterAI）"),
+            "full title should be truncated on the table row at {width}x{height}"
+        );
+    }
+}
+
+#[test]
+fn help_modal_documents_usage_sort_and_quota_reset_date() {
+    let mut app = test_app();
+    app.page = Page::Credits;
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('?'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let credits = compact(&render(&mut app, 120, 40));
+    assert!(credits.contains("reset_date"), "{credits}");
+    assert!(credits.contains("days"), "{credits}");
+
+    app.page = Page::Usage;
+    let usage = compact(&render(&mut app, 120, 40));
+    assert!(usage.contains("s循环排序"), "{usage}");
 }
 
 #[test]

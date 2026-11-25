@@ -65,7 +65,7 @@ Windows/Linux 终端与真实后端人工验收
 - 合法空数组与查询失败的区别。
 - auth valid/expiring/expired/missing/unknown。
 - active/enabled 的账号组合。
-- credits/days 不混合，total 为 0 或 null 不计算百分比。
+- credits/days 不混合，total 为 `0`、`null`、负数或 NaN 不计算百分比；days 余额带 `d` 后缀，总量未知显示 `—`、不画进度。
 - stale、last_success、receivedAt、fetchedAt 的推导。
 - 未知 provider 只读，未知 enum 不崩溃。
 - 数字异常、缺时间和非法时间不会 panic。
@@ -153,11 +153,11 @@ Windows/Linux 终端与真实后端人工验收
 |---|---|
 | 总览 | 正常、混合漂移、局部失败、首次加载、stale；宽屏右栏与窄屏关键列 |
 | 服务 | 操作中、只读、普通确认、高风险确认、刷新未确认 |
-| 额度 | 多单位、多账号、空桶、可领取、活动关闭、过期提醒、`reset_date`、无总量 `────` |
+| 额度 | 多单位、多账号、空桶、可领取、活动关闭、过期提醒、`reset_date`、days 余额 `d` 后缀、总量 0/未知显示 `—` 且不画进度 |
 | 账号 | 单账号、多账号、空账号、dry-run、平台不支持 |
 | 日志 | 空日志、过滤、暂停、跟随、截断、脱敏、级别着色 |
 | 诊断 | 环境错误、健康部分失败、真实试打确认、checklist + 通过率 meter |
-| 用量 | KPI/Sparkline/Token 横条/gauge/模型表；空活动、stale；`s` 四档排序 |
+| 用量 | KPI/Sparkline/Token 横条/gauge/模型表；工具成功率副行不重复百分比；空活动、stale；`s` 四档排序 |
 | 帮助 | 当前页面和当前模式说明 |
 
 每个关键页面至少测试：
@@ -205,7 +205,7 @@ Windows/Linux 终端与真实后端人工验收
 
 ## 9. 终端集成测试
 
-当前已有 `tests/pty_smoke.rs`：在 Windows ConPTY 中启动匿名 demo，等待标题绘制，发送 `q` 并验证成功退出。另有 default-ignored 测试用真实后端 `--read-only` 启动，等待 provider 数据出现后退出。Linux 首次 CI 运行后再确认真实 PTY 表现。
+当前已有 `tests/pty_smoke.rs`：在 Windows ConPTY 中启动匿名 demo，等待标题绘制，发送 `q` 并验证成功退出。另有两个 default-ignored 真实只读测试：`live_readonly_starts_in_a_pty_and_reads_providers`（等待 14 条 provider 出现）与 `live_usage_page_reads_real_model_stats`（按 `7` 打开用量页，等待真实 Model/Steps/provider 出现）。两者均已在 2026-11-25 本机通过。
 
 pseudo-terminal 测试至少验证：
 
@@ -263,19 +263,30 @@ cargo test dump_screens -- --ignored --nocapture   # 手工 dump 7 页 × 4 尺�
 cargo build --release
 ```
 
+真实只读验收（不执行写操作；不在公共 CI 跑真实凭证）：
+
+```bash
+ROUTER_TUI_TEST_ROOT=/path/to/router cargo test local_readonly_smoke -- --ignored --nocapture
+ROUTER_TUI_TEST_ROOT=/path/to/router cargo test local_usage_smoke -- --ignored --nocapture
+ROUTER_TUI_TEST_ROOT=/path/to/router cargo test --test pty_smoke live_readonly_starts_in_a_pty_and_reads_providers -- --ignored --nocapture
+ROUTER_TUI_TEST_ROOT=/path/to/router cargo test --test pty_smoke live_usage_page_reads_real_model_stats -- --ignored --nocapture
+```
+
 ### 12.1 本机实测结果（2026-11-25）
 
 | 检查 | 命令 | 结果 |
 |---|---|---|
-| 单元 + PTY | `cargo test` | ✅ 98 unit + 1 demo PTY = **99 passed**，0 failed；unit 4 ignored，PTY 另 2 live ignored |
+| 单元 + PTY | `cargo test` | ✅ 103 unit + 1 demo PTY = **104 passed**，0 failed；unit 4 ignored，PTY 另 2 live ignored |
 | 格式 | `cargo fmt --check` | ✅ 通过 |
 | Clippy | `cargo clippy --all-targets -- -D warnings` | ✅ 0 warning |
 | 发布构建 | `cargo build --release` | ✅ 通过 |
 | 渲染矩阵 | TestBackend | ✅ 120×40、100×30、80×24、60×20 × 7 页面；空数据/后端失败/ascii/no-color |
 | 截图 | `cargo test dump_screens -- --ignored --nocapture` | 手工 dump，不做像素 golden |
 
-新增 44 个测试；unit 侧 4 个 ignored 为 2 个真实只读冒烟 + 2 个截图 dump，PTY 侧另有 2 个
-live ignored（共 6 个 ignored）。CJK 宽度受终端字体影响，因此不引入像素级 golden 快照，
+本轮另新增 days 单位与 0 总量、14 条真实 provider 形状（含 4 家长 CJK 标题）、帮助弹窗、
+`day_units_are_recognized`、`zero_or_negative_totals_are_not_rendered` 等用例。unit 侧 4 个
+ignored 为 2 个真实只读冒烟 + 2 个截图 dump，PTY 侧另有 2 个 live ignored（共 6 个 ignored）。
+CJK 宽度受终端字体影响，因此不引入像素级 golden 快照，
 改为断言可见文本、边界与状态符号。
 
 另做：

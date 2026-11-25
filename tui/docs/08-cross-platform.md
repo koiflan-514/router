@@ -64,7 +64,7 @@ TUI 应根据后端能力和实际错误显示操作，不仅根据 `cfg!(window
 
 Windows 用量后端优先使用 `%APPDATA%\npm\node_modules\@opencode\cli\bin\opencode.exe`，与 `opencode.cmd` 指向的官方原生程序一致，不通过 `.cmd` 启动。其他系统使用 PATH 中的 `opencode`，也可用 `ROUTER_OPENCODE` 覆盖。OpenCode CLI 负责服务发现和认证上下文，TUI 不读取数据库。
 
-Node 缺失时，真实模式显示安装/参数建议并安全退出或停留在明确错误页；demo 仍可运行。不得把 Node 缺失显示成八家 provider 全部离线。
+Node 缺失时，真实模式显示安装/参数建议并安全退出或停留在明确错误页；demo 仍可运行。不得把 Node 缺失显示成十三家 provider 全部离线。
 
 ## 5. Root 与可执行文件发现
 
@@ -176,7 +176,7 @@ GitHub Actions 计划：
 | `windows-latest` | fmt、clippy、test、release build、CLI help、匿名 fixtures |
 | `ubuntu-latest` | fmt、clippy、test、release build、CLI help、匿名 fixtures |
 
-真实八家 API 实测不进入公共 CI，因为它需要本机凭证、消耗额度并改变用户环境。真实后端人工验收单独记录。
+真实十三家 API 实测不进入公共 CI，因为它需要本机凭证、消耗额度并改变用户环境。真实后端人工验收单独记录。
 
 发布包按 OS/arch 分开，包含 binary、README、必要许可与校验值，不包含本机配置和日志。
 

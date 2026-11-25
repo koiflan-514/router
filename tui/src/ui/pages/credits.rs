@@ -172,11 +172,10 @@ fn quota_row(line: &QuotaLine, width: u16, breakpoint: Breakpoint, theme: Theme)
     let tone = status_tone(&line.status);
     let ratio = quota_line_ratio(line);
     let meter = widgets::meter_string(theme, ratio, 8);
-    let remaining = line
-        .remaining
-        .map(format_number)
-        .unwrap_or_else(|| "—".into());
-    let total = line.total.map(format_number).unwrap_or_else(|| "—".into());
+    let remaining = remaining_text(line);
+    // 没有总量（或上游用 0 表示分母未知）时不显示 0；每天额度尤其不能被读成 credits。
+    let total = total_text(line);
+    let wide = breakpoint.is_wide() || width >= 100;
     let status = compact_status(line, 12, glyphs.ellipsis());
     let status_icon = match tone {
         Tone::Error => glyphs.bad(),
@@ -204,6 +203,12 @@ fn quota_row(line: &QuotaLine, width: u16, breakpoint: Breakpoint, theme: Theme)
     }
     cells.push(cell(format!("{remaining:>8}"), theme.bold(Tone::Success)));
     if !breakpoint.is_compact() {
+        let total = if wide {
+            total.clone().unwrap_or_else(|| "—".into())
+        } else {
+            // 窄表不展示总量列内容，避免把 days 的 0 误读成额度总量。
+            total.clone().unwrap_or_default()
+        };
         cells.push(cell(format!("{total:>7}"), theme.muted()));
     }
     cells.push(cell(
@@ -214,7 +219,7 @@ fn quota_row(line: &QuotaLine, width: u16, breakpoint: Breakpoint, theme: Theme)
             Tone::Muted
         }),
     ));
-    if breakpoint.is_wide() || width >= 100 {
+    if wide {
         cells.push(cell(reset, theme.muted()));
         cells.push(cell(
             format!(
@@ -228,6 +233,36 @@ fn quota_row(line: &QuotaLine, width: u16, breakpoint: Breakpoint, theme: Theme)
         cells.push(cell(format!("{status_icon} {status}"), theme.fg(tone)));
     }
     Row::new(cells)
+}
+
+/// days / day / d / 天 表示凭证有效期，不是 credits 总量。
+fn is_day_unit(unit: &str) -> bool {
+    matches!(
+        unit.trim().to_ascii_lowercase().as_str(),
+        "days" | "day" | "d" | "天"
+    )
+}
+
+/// 余额文本：days 类额度带 `d` 后缀，避免 `29 / 0` 被读成 29 credits。
+fn remaining_text(line: &QuotaLine) -> String {
+    match line.remaining {
+        Some(value) => {
+            let text = format_number(value);
+            if is_day_unit(&line.unit) {
+                format!("{text}d")
+            } else {
+                text
+            }
+        }
+        None => "—".into(),
+    }
+}
+
+/// 总量文本：只有真正大于 0 的总量才显示；0 / 负数 / NaN 都视为「未知」。
+fn total_text(line: &QuotaLine) -> Option<String> {
+    line.total
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .map(format_number)
 }
 
 fn compact_status(line: &QuotaLine, width: usize, ellipsis: &str) -> String {
@@ -262,4 +297,50 @@ fn status_tone(status: &str) -> Tone {
 
 fn cell(text: impl Into<String>, style: ratatui::style::Style) -> Cell<'static> {
     Cell::from(text.into()).style(style)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(remaining: Option<f64>, total: Option<f64>, unit: &str) -> QuotaLine {
+        QuotaLine {
+            provider: "workbuddy".into(),
+            title: "WorkBuddy 国内版".into(),
+            source: "凭证有效期".into(),
+            remaining,
+            total,
+            unit: unit.into(),
+            status: "凭证可读".into(),
+            reset_date: None,
+            fetched_at: None,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn day_units_are_recognized() {
+        for unit in ["days", "day", "d", "D", "天", " Days "] {
+            assert!(is_day_unit(unit), "{unit:?} should be a day unit");
+        }
+        for unit in ["credits", "tokens", "M tok", "", "hour"] {
+            assert!(!is_day_unit(unit), "{unit:?} should not be a day unit");
+        }
+    }
+
+    #[test]
+    fn zero_or_negative_totals_are_not_rendered() {
+        assert_eq!(remaining_text(&line(Some(29.0), Some(0.0), "days")), "29d");
+        assert_eq!(total_text(&line(Some(29.0), Some(0.0), "days")), None);
+        assert_eq!(total_text(&line(Some(29.0), None, "days")), None);
+        assert_eq!(total_text(&line(Some(1.0), Some(-5.0), "credits")), None);
+        assert_eq!(
+            total_text(&line(Some(1.0), Some(f64::NAN), "credits")),
+            None
+        );
+        assert_eq!(
+            total_text(&line(Some(96.0), Some(800.0), "credits")).as_deref(),
+            Some("800")
+        );
+    }
 }

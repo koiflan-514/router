@@ -186,7 +186,7 @@ fn help_text(app: &App) -> String {
             "服务\nu 启动 · d 停止 · K 停止但保留客户端 · R 重启\no 仅启用此家（会关闭其他已启用项）\nx 关闭此家 · s 同步 · A 全部启用 · N 全部关闭\nL 日志 · Enter 详情\n网关是叠加层：不参与 on/off，用 node router.mjs gateway up/down"
         }
         Page::Credits => {
-            "额度\n↑↓ 选择额度行 · Enter 详情 · r 刷新\nc 签到（当前后端未统一接入，只展示状态）\n4 转到相同 provider 的账号页"
+            "额度\n↑↓ 选择额度行 · Enter 详情 · r 刷新\nc 签到（当前后端未统一接入，只展示状态）\n重置日优先取上游 reset_date；缺失时回退采集时间（列仍标「重置日」）\ndays 类额度只表示凭证有效期，没有总量；进度只在 total > 0 时绘制\n4 转到相同 provider 的账号页"
         }
         Page::Accounts => {
             "账号\n↑↓ 选择 · Enter 详情 · v 预览切换 · c 正式切换\na 恢复整池 · A 添加账号 · L 登录 · 3 额度"
