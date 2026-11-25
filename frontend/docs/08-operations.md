@@ -21,7 +21,7 @@
 | Node.js | **建议 ≥ 20**；本机实测 `v26.13.0` | 桥接与 Vite 都是 Node 程序；`router.mjs` 本身也要求 Node |
 | 仓库根 | 含 `router.mjs` 的目录（本机示例 `D:\router`） | 桥接据此 spawn CLI、读 `router.json`；不写死绝对路径 |
 | 浏览器 | Chromium / Firefox / Safari 最新稳定 | 普通单页应用，不要求扩展或特殊权限 |
-| 8 家反代 / 统一网关 / OpenCode CLI | **均可选** | 只影响服务、网关、用量页的数据来源；缺失时显示"未运行/不可用"，不升级为全局失败 |
+| 13 家反代 / 统一网关 / OpenCode CLI | **均可选** | 只影响服务、网关、用量页的数据来源；缺失时显示"未运行/不可用"，不升级为全局失败 |
 
 - 首次安装（计划命令）：`cd D:/router/frontend && npm install`（依赖不入库，见 §5）。
 - 前置自检（现有命令）：
@@ -29,7 +29,7 @@
 ```bash
 node router.mjs doctor             # 命令、工作目录、凭证、端口、opencode
 node router.mjs gateway doctor     # 网关自检 + 与 PROVIDERS 的端口交叉校验
-node scripts/health.mjs --no-probe # 无试打的八家体检（只读）
+node scripts/health.mjs --no-probe # 无试打的十三家体检（只读）
 ```
 
 缺 Node 时不能用真实后端；此时仍可用 §3 的**演示模式**验证界面，但演示模式不代表任何真实状态。
@@ -62,7 +62,7 @@ node scripts/health.mjs --no-probe # 无试打的八家体检（只读）
 `8785`（网关），再断言 `8792`、`5173` **不在**该集合内；命中则启动前拒绝并打印冲突来源。
 
 ```bash
-node router.mjs list --json           # 现有：八家与网关的实际端口
+node router.mjs list --json           # 现有：十三家与网关的实际端口
 node router.mjs gateway status --json # 现有：网关调度与端口
 npm run ports:check                   # 计划：8792/5173 不在上述集合内才通过
 ```
@@ -73,7 +73,7 @@ npm run ports:check                   # 计划：8792/5173 不在上述集合内
 ### 2.3 进程模型
 
 - **桥接**是唯一的常驻进程，自己只监听一个端口（生产 8792）。
-- 桥接**不托管** 8 家反代与网关：这些进程仍由 `router.mjs` 管（`up/down/restart/…`），
+- 桥接**不托管** 13 家反代与网关：这些进程仍由 `router.mjs` 管（`up/down/restart/…`），
   关掉面板不影响任何反代，停掉反代也不影响面板显示"进程未运行"。
 - 关闭标签页**不会**停止桥接：需要 `Ctrl+C`（前台）或显式停进程（见 §10）。
 
@@ -163,7 +163,7 @@ npm run start                  # 计划：同源托管 dist/ 与 /api -> http://
 - 与 `tui/docs/04-architecture.md §14` 一致；面板不发明第二套发现规则，也不依赖打包机上的
   绝对路径 —— 从任意目录启动都应正确解析 root。
 - 找不到 root 时明确报错（"找不到 router.mjs，请传 --router-root 或设置 ROUTER_ROOT"），
-  **不得**回退成"八家全部离线"这种误导性状态。
+  **不得**回退成"十三家全部离线"这种误导性状态。
 - MVP 不引入额外用户配置文件：刷新间隔等由设置页存到浏览器本地存储（见 [04 §10](04-architecture.md)），
   不改桥接参数，避免多套配置来源。
 
@@ -238,7 +238,7 @@ node router.mjs logs <provider> 80
 | 演示模式里"操作成功"但真实服务没变 | 演示模式只改匿名 fixtures | 这是预期行为；顶部 `DEMO` 标记必须可见，文案不得暗示真实变化 |
 
 排障顺序（与 TUI 相同）：先确认**面板自身**（构建、端口、token），再确认**桥接**，
-最后才怀疑**单家 provider / 网关**。不要一上来就重启八家服务。
+最后才怀疑**单家 provider / 网关**。不要一上来就重启十三家服务。
 
 ## 8. 与 TUI / CLI 共存
 

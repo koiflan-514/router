@@ -30,7 +30,7 @@ token，不得各自另立一套。
 | 表格 | **TanStack Table（经 shadcn Data Table）** | 排序/筛选/虚拟滚动可控 |
 | 数据接入 | **新增 Node 桥接服务**（`frontend/server/`） | 网关无 CORS、且不能启停进程；浏览器无法直接驱动 CLI |
 | 桥接职责 | 包装 CLI（参数数组 spawn）+ 代理网关 HTTP + SSE 推流 + 只监听回环 | 与 TUI 的 `NodeBackend` 同构，见 `tui/docs/04-architecture.md` |
-| 端口 | 桥接/静态站点 `127.0.0.1:8792`；Vite dev `127.0.0.1:5173` | 8792 未与任何反代冲突（9 家占用 7863/7864/8787/8788/8789/8790/8791/8793/10087/20131/8785） |
+| 端口 | 桥接/静态站点 `127.0.0.1:8792`；Vite dev `127.0.0.1:5173` | 8792 未与任何反代冲突（十三家占用 7863/7864/8787/8788/8789/8790/8791/8793/8794/8795/8796/8797/10087/20131，网关 8785） |
 
 **非目标**：本轮不修改 `router.mjs`、`gateway/`、`tui/` 的任何行为与契约。若实现阶段需要
 后端增量字段，按 `tui/docs/05-backend-contract.md` 的"增量兼容"规则单独提案（见 §12）。
@@ -110,8 +110,20 @@ x-router-local-answer`。回环默认免密钥；带无效密钥也不拦（`str
 
 ## 4. Provider、Region 与网关的关系
 
-- `Provider`：9 家本机反代 —— `qoder-cn, qoder, trae-local, codearts, zcode, workbuddy,
-  workbuddy-global, loomy, raccoon`。它们是"spawn 什么进程"的对象，有 PID/端口/日志。
+- `Provider`：十三家本机反代 —— `qoder-cn, qoder, trae-local, codearts, zcode, loomy,
+  raccoon, qwenwork, dumate, lingxi, lobster, workbuddy, workbuddy-global`。它们是"spawn 什么进程"的对象，
+  有 PID/端口/日志。
+
+  | Provider | 端口 | Provider | 端口 |
+  |---|---:|---|---:|
+  | `qoder-cn` | 8789 | `qoder` | 8790 |
+  | `trae-local` | 7863（内部 7864） | `codearts` | 10087 |
+  | `zcode` | 20131 | `loomy` | 8791 |
+  | `raccoon` | 8793 | `qwenwork` | 8794 |
+  | `dumate` | 8795 | `lingxi` | 8796 |
+  | `lobster` | 8797 | `workbuddy` | 8787 |
+  | `workbuddy-global` | 8788 | `gateway`（叠加层） | 8785 |
+
 - `Region`：Qoder 与 WorkBuddy 各两套端点的区域属性，不是第三层对象。
 - `Gateway`：**叠加层**，id=`gateway`，端口 8785。它没有独立开/关（`on==up`），
   `on/off` 语义不适用；opencode provider 由 `gateway install` 独立管理。
@@ -124,7 +136,7 @@ x-router-local-answer`。回环默认免密钥；带无效密钥也不拦（`str
 
 | 页签 | 页面 ID | 路由 | 回答的问题 |
 |---|---|---|---|
-| 总览 | `overview` | `/` | 九家现在能不能用？哪里漂移？ |
+| 总览 | `overview` | `/` | 十三家现在能不能用？哪里漂移？ |
 | 服务 | `providers` | `/providers` | 谁在跑？怎么启停/重启/开关/同步？ |
 | 额度 | `quota` | `/quota` | 余额、凭证天数、签到、重置日？ |
 | 账号 | `accounts` | `/accounts` | 当前生效谁？怎么切/恢复整池？ |
@@ -142,6 +154,10 @@ x-router-local-answer`。回环默认免密钥；带无效密钥也不拦（`str
 
 URL 即状态：选中 provider、时间范围、日志过滤、表格排序都进 search params（可分享、可回退）。
 顶栏常驻：工作范围（local/demo）、桥接与网关可达性、各数据源最后成功时间、活动任务数。
+
+总览矩阵固定 7 列：**Provider / 开关 / 进程·漂移 / 认证 / 客户端 / 端口·模型 / 额度**；
+「进程·漂移」合并展示且排序仍按 `up`，「端口·模型」合并展示但两者都可见；不设单独「跳转」列，
+跳服务/日志/诊断统一走「行点击 → 详情抽屉」，抽屉内链接保留 `provider` 焦点。
 
 ## 6. 统一领域模型（前端只消费这些）
 
@@ -238,7 +254,7 @@ type Task = {                          // 对应 TUI 的 Action 内部模型
   完成后**重新查询**，只在确认后才更新 UI。
 - 危险等级：`normal`（up/down/keep-oc/restart/off/sync）、`high`（on/all/none、恢复整池）。
   高风险必须列出受影响名单，默认焦点"取消"。
-- 互斥：写任务**全局串行**（九家白名单规模小，简单优先）；同目标重复提交去重。
+- 互斥：写任务**全局串行**（十三家白名单规模仍小，简单优先）；同目标重复提交去重。
 - `read-only` 模式在**桥接层**阻断写，不只是隐藏按钮。
 - 交互式动作（`login`/`account add`）浏览器无法接管 stdin：桥接只**发起并等待**，
   把终端留给用户在原生终端完成，UI 显示"等待外部登录完成"并可取消（见 05/07 文档）。
@@ -257,7 +273,8 @@ type Task = {                          // 对应 TUI 的 Action 内部模型
 - 状态**不只靠颜色**：文字/图标/数值同时存在；错误给"下一步"。
 - Provider 分类色（稳定映射，对齐 `tui/docs/14-usage-analytics.md` §5）：
   `codearts` 紫 · `qoder-cn` 青 · `qoder` 蓝 · `trae-local` 绿 · `workbuddy` 黄 ·
-  `workbuddy-global` 浅紫 · `zcode` 橙 · `loomy` 洋红 · `raccoon` 红 · `gateway` 中性。
+  `workbuddy-global` 浅紫 · `zcode` 橙 · `loomy` 洋红 · `raccoon` 红 · `qwenwork` 天蓝 ·
+  `dumate` 绿 · `lingxi` 品红 · `lobster` 朱红 · `gateway` 中性。
 - 排版：Fluent ramp 12/14/16/20/28px；11px 辅助文案与 13px 表格为密度变体，均满足 AA；
   等宽用于端口/PID/日志；数字右对齐 + `tabular-nums`。
 - 圆角/阴影：`--radius-2/4/8/12/16` 与 `--shadow-2/4/8/16`，不另造刻度。

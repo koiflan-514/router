@@ -11,8 +11,9 @@
 
 ## 1. 调研目的与范围
 
-**目的**：把本机八家反代（`qoder-cn, qoder, trae-local, codearts, zcode, workbuddy,
-workbuddy-global, loomy`）与统一网关，做成一个**看得清、控得准、出错能定位**的浏览器控制台。
+**目的**：把本机十三家反代（`qoder-cn, qoder, trae-local, codearts, zcode, loomy, raccoon,
+qwenwork, dumate, lingxi, lobster, workbuddy, workbuddy-global`）与统一网关，做成一个
+**看得清、控得准、出错能定位**的浏览器控制台。
 
 **范围边界**（决定"哪些调研结论不适用"）：
 
@@ -109,7 +110,7 @@ workbuddy-global, loomy`）与统一网关，做成一个**看得清、控得准
 - Activity 以 Spend、Tokens、Requests 为核心，支持小时/天/月/年范围，并按 Model、API Key、
   Creator 分组；路由决策综合价格、吞吐、TTFT、429、可靠性与工具调用质量。
 - 可借鉴：总览只放关键指标、指标必须有时间范围与来源、provider 详情要能解释异常。
-- 不照搬：本项目不是 OpenRouter 式实时智能路由，没有统一请求分析库；八家 credits 不是统一
+- 不照搬：本项目不是 OpenRouter 式实时智能路由，没有统一请求分析库；十三家 credits 不是统一
   货币，不能合并成 Spend。此结论直接支撑 **W-06**。
 
 ### 2.4 Portkey 与 Helicone
@@ -174,7 +175,7 @@ workbuddy-global, loomy`）与统一网关，做成一个**看得清、控得准
   [00 设计基线 §8](00-design-baseline.md) 的刷新策略一一对应。
 - 天然映射 TUI 的 `Resource<T>`：`data` ↔ 最近成功、`error` ↔ 最近失败、`stale` ↔ 有旧数据
   且最近刷新失败或超阈值。
-- 选它而不是自造 `useEffect + setState` 轮询：本项目有 8 家 × 多资源要按不同间隔刷新，自造
+- 选它而不是自造 `useEffect + setState` 轮询：本项目有 13 家 × 多资源要按不同间隔刷新，自造
   轮询会重复处理去重、竞态与 `document.hidden` 暂停。
 
 ### 3.3 TanStack Router（search 参数即状态）
@@ -242,7 +243,7 @@ workbuddy-global, loomy`）与统一网关，做成一个**看得清、控得准
 
 | 目标 | 当前数据 | 设计处理 | 是否 MVP |
 |---|---|---|---|
-| 八家服务状态（开关/进程/客户端/认证） | `list --json` 已有 | 直接接入，漂移由后端字段推导 | ✅ |
+| 十三家服务状态（开关/进程/客户端/认证） | `list --json` 已有 | 直接接入，漂移由后端字段推导 | ✅ |
 | 账号池与当前账号 | `account --json` 已有 | 直接接入，写操作后重新查询 | ✅ |
 | 额度与凭证天数 | 网关 `balance` + 各家 CLI，能力不一 | 分来源展示，`days` 不并入 credits | ✅ |
 | 签到状态 | 各家能力不同 | 按能力展示，未支持显示 `—` | ✅ |
@@ -253,7 +254,7 @@ workbuddy-global, loomy`）与统一网关，做成一个**看得清、控得准
 | **TTFT / P75 / P99 延迟** | 无持续采样，网关不记录逐请求耗时 | **不进入 MVP**；不画推算曲线 | ❌ |
 | **逐请求成功率 / 错误率** | 无统一请求事件；只有调度快照的近期成功率 | **不进入 MVP**；只展示快照值并标注口径 | ❌ |
 | **逐请求路由尝试（换了几家）** | 仅响应头 `x-router-attempts`，无持久化 | **不进入 MVP**；只在下游客户端可感知处说明 | ❌ |
-| **跨厂商积分/花费汇总** | 八家 credits 非统一货币 | **不进入 MVP**；不显示总额、不排行榜 | ❌ |
+| **跨厂商积分/花费汇总** | 十三家 credits 非统一货币 | **不进入 MVP**；不显示总额、不排行榜 | ❌ |
 
 对"不进入 MVP"的四项，统一策略与 [00 设计基线 §7](00-design-baseline.md) 一致：
 **宁可显示 `—`，也不画一条没有数据源的线**。若将来要补，必须先定义独立请求事件契约（时间、
@@ -271,7 +272,7 @@ provider、模型、状态、Token、延迟、费用来源），在数据可靠�
 | W-04 | 服务端状态用 TanStack Query，写操作用 React 19 Actions，不预改状态 | React 19 Actions + Query 的 stale/去重；进程操作不可乐观展示 | [04 架构](04-architecture.md) |
 | W-05 | 开关、进程、客户端配置、认证是四个独立状态，漂移由后端字段推导 | Vercel 的 Status 与 Authentication 是不同列；本项目 `on/up/oc/auth` 各自独立 | [12 术语](12-glossary.md) |
 | W-06 | 不汇总不同厂商积分；`steps` 不等于请求数；`cost` 不折算积分 | OpenRouter 的 Spend 依赖统一货币；本项目不具备；OpenCode 的 `steps` 有原义 | [02 需求](02-requirements.md) |
-| W-07 | 危险操作显式确认、默认取消；写任务全局串行 | LiteLLM 的破坏性操作有独立确认；八家规模小，串行最简单可靠 | [03 界面](03-ui-design.md) |
+| W-07 | 危险操作显式确认、默认取消；写任务全局串行 | LiteLLM 的破坏性操作有独立确认；十三家规模仍小，串行最简单可靠 | [03 界面](03-ui-design.md) |
 | W-08 | 只读/演示模式在桥接层拦截，不靠前端隐藏 | LiteLLM 的 `DISABLE_ADMIN_UI` 是服务端开关，不是隐藏菜单 | [07 安全](07-security.md) |
 | W-09 | 第三方依赖有预算上限并集中审计（面板必须有构建期依赖，与"零依赖"核心区分） | shadcn"源码进仓库"降低运行时依赖；根目录与 `gateway/` 保持零 devDependencies | [07 安全](07-security.md) |
 
@@ -294,7 +295,7 @@ provider、模型、状态、Token、延迟、费用来源），在数据可靠�
    逐请求成功率、逐请求路由尝试、跨厂商积分汇总一律不进入 MVP，用 `—` 而不是推算值。
 5. **技术选型服务于"写操作安全"**：React 19 Actions 管 pending/error，TanStack Query 管服务端
    状态与 stale，TanStack Router 管可分享状态，shadcn 管可控组件与主题——四者职责不重叠。
-6. 首版成功标准是让八家本地反代**看得清、控得准、出错能定位**，而不是图表数量。
+6. 首版成功标准是让十三家本地反代**看得清、控得准、出错能定位**，而不是图表数量。
 
 相关文档：[02 产品需求](02-requirements.md) · [03 界面设计](03-ui-design.md) ·
 [04 技术架构](04-architecture.md) · [10 实施计划](10-implementation-plan.md)。

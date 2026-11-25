@@ -18,9 +18,20 @@
 
 ### Provider
 
-（继承）一个模型来源及其本地接入实例。当前八个 ID：`qoder-cn`、`qoder`、`trae-local`、`codearts`、`zcode`、`workbuddy`、`workbuddy-global`、`loomy`。
+（继承）一个模型来源及其本地接入实例。当前十三家 ID：`qoder-cn`、`qoder`、`trae-local`、`codearts`、`zcode`、`loomy`、`raccoon`、`qwenwork`、`dumate`、`lingxi`、`lobster`、`workbuddy`、`workbuddy-global`；`gateway` 是叠加层，不是第十四家反代。
 
 Provider 是路由与控制对象，不等于模型、账号或厂商本身；面板中避免混用"渠道""线路""模型源"。
+
+### **Compact Chip（紧凑 Provider 标签）**
+
+**新增。**`ProviderChip` 的 `compact` 变体只渲染显示名称，完整 provider id 放在 `title` 与详情抽屉；
+总览矩阵、额度卡、报表 Top 用它压缩行高，不丢失可访问名（名称 + id）与分类色圆点。
+
+### **Cache Ratio（缓存比例）**
+
+**新增。**缓存读/写 Token 与输入 Token 的比值，用于说明缓存命中量级。比例 `>1` 用倍数
+（如 `21.7× 输入`），`0 < 比例 ≤ 1` 用百分比，`input=0` 或未知显示 `—`；绝对 Token 数不截断。
+它**不是** Token 构成的一部分，也不并入 `input + output + reasoning`。
 
 ### Region
 
@@ -32,7 +43,7 @@ Provider 是路由与控制对象，不等于模型、账号或厂商本身；�
 
 ### Proxy / Gateway
 
-（复用）本机常驻反代或网关，把厂商订阅/凭证转换为客户端可用端点。八家反代是 **Proxy**；`gateway`（id=`gateway`，端口 8785）是叠加在八家之上的**统一网关**。面板把八家放在"服务"页、把网关放在"网关"页，二者不混列；网关的叠加语义见 §2。
+（复用）本机常驻反代或网关，把厂商订阅/凭证转换为客户端可用端点。十三家反代是 **Proxy**；`gateway`（id=`gateway`，端口 8785）是叠加在十三家之上的**统一网关**。面板把十三家放在"服务"页、把网关放在"网关"页，二者不混列；网关的叠加语义见 §2。
 
 ### **Panel（网页面板）**
 
@@ -52,13 +63,14 @@ Provider 是路由与控制对象，不等于模型、账号或厂商本身；�
 
 | 页面 ID | 路由 | 回答的问题 |
 |---|---|---|
-| `overview` | `/` | 八家现在能不能用？哪里漂移？ |
+| `overview` | `/` | 十三家现在能不能用？哪里漂移？ |
 | `providers` | `/providers` | 谁在跑？怎么启停/重启/开关/同步？ |
 | `quota` | `/quota` | 余额、凭证天数、签到、重置日？ |
 | `accounts` | `/accounts` | 当前生效谁？怎么切/恢复整池？ |
 | `logs` | `/logs` | 某家为什么报错？ |
 | `diagnostics` | `/diagnostics` | doctor/健康/试打结果？ |
 | `usage` | `/usage` | OpenCode 会话/Token/工具/模型聚合？ |
+| `reports` | `/reports` | 跨数据源只读汇总、导出与打印？ |
 | `gateway` | `/gateway/*` | 调度、用量、降级链、密钥、免费供应商、本地应答 |
 | `settings` | `/settings` | 主题、刷新间隔、只读、桥接连接、演示模式 |
 
@@ -107,7 +119,7 @@ Provider 是路由与控制对象，不等于模型、账号或厂商本身；�
 
 ### 网关"叠加"语义
 
-（复用）网关是**叠加层**而非第九家 provider：它没有独立的开/关，`on` 直接等于进程状态（`on==up`），因此 `on`/`off` 这对写操作对网关不适用；网关的 opencode provider 由 `gateway install` 独立管理。面板在"服务"页对网关隐藏启停按钮。
+（复用）网关是**叠加层**而非第十三家 provider：它没有独立的开/关，`on` 直接等于进程状态（`on==up`），因此 `on`/`off` 这对写操作对网关不适用；网关的 opencode provider 由 `gateway install` 独立管理。面板在"服务"页对网关隐藏启停按钮。
 
 ## 3. 账号状态
 
@@ -165,7 +177,7 @@ Provider 是路由与控制对象，不等于模型、账号或厂商本身；�
 
 ### Spend
 
-（继承）真实货币或明确计费口径下的费用。当前八家 credits 余额不等于 Spend；没有可靠数据时面板不显示 Spend。
+（继承）真实货币或明确计费口径下的费用。当前十三家 credits 余额不等于 Spend；没有可靠数据时面板不显示 Spend。
 
 ### Remaining / Total / Used
 

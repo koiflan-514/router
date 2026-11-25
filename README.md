@@ -183,7 +183,8 @@ cargo run --manifest-path tui/Cargo.toml -- --router-root . --read-only
 TUI 启动和刷新只读，不会自动登录、签到或试打；启停、切号和多目标操作都有确认。
 `7` 打开用量分析，可查看 OpenCode 真实会话、Token、活动、工具成功率和模型聚合，`s` 在步骤/Token/成本/名称间排序。
 界面已做视觉重构：五行外壳、三档响应式（≥120 / 80–119 / <80）、语义色与 `--ascii`/`--no-color` 降级、
-CJK 按显示宽度对齐；`cargo test` 为 98 unit + 1 PTY（99 passed；unit 4 ignored，PTY 另 2 live ignored）。
+CJK 按显示宽度对齐；`cargo test` 为 103 unit + 1 demo PTY（104 passed；unit 4 ignored，PTY 另 2 live ignored）。
+真实只读 PTY 验证（`live_readonly_…` 与 `live_usage_…`）本机通过；真实 `list --json` 14 条，TUI 显示 `8/14`。
 设计、键位、安全边界与已知限制见 [tui/README.md](tui/README.md) 和
 [tui/docs/](tui/docs/README.md)。
 
@@ -205,8 +206,11 @@ npm run start -- --read-only # 只读：写操作在桥接层被拒绝
 页面：总览、服务、额度、账号、日志、诊断、用量、报表、网关（调度/用量/降级链/密钥/免费供应商/本地应答）、
 设置，共 15 个路由页；视觉基线为 Fluent 2（Mica/Acrylic、语义状态色、focus rectangle、150/250ms 动效），
 保留 shadcn 变量名作兼容映射。安全语义与 TUI 一致：危险操作显式确认、写任务串行、只读/演示在桥接层拦截、
-日志/任务输出脱敏。验证：`npm test` 247 passed（23 文件 + 1 skipped）、Playwright 96 passed、
-axe 0 violation、375/768/1440 × 8 页无横向溢出。
+日志/任务输出脱敏。网页面板覆盖 **13 家反代 + `gateway` 叠加层**（包含千问办公、百度搭子、
+WPS 灵犀、有道龙虾），写操作白名单同样覆盖它们。验证：`npm test` 269 passed（27 文件 + 1 skipped）、
+demo Playwright 103 passed / 9 skipped、真实只读 E2E 9 passed、axe 0 violation、
+375/768/1440 × 8 页无横向溢出。demo E2E 是确定性 CI；真实只读 E2E 是本地人工/验收链路，
+不替代 CI，也不在公共 CI 使用真实凭证。
 设计与契约见 [frontend/README.md](frontend/README.md) 和 [frontend/docs/](frontend/docs/README.md)。
 
 ### 更新模型列表

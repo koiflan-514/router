@@ -49,7 +49,7 @@ HTTP 语义：`200` 成功、`4xx` 请求或权限错误、`5xx` 后端不可用
  "gateway":{"reachable":true,"host":"127.0.0.1","port":8785,"version":"1.0.0"},
  "root":{"ok":true,"hasRouterMjs":true},"mode":{"demo":false,"readOnly":false}}
 ```
-`gateway.reachable=false` 时 `version=null`，不影响本机八家页面；`root.ok=false` 表示未发现 `router.mjs`，只读源退化为 `BACKEND_UNAVAILABLE`；`mode` 供顶栏显示工作范围徽标。
+`gateway.reachable=false` 时 `version=null`，不影响本机十三家页面；`root.ok=false` 表示未发现 `router.mjs`，只读源退化为 `BACKEND_UNAVAILABLE`；`mode` 供顶栏显示工作范围徽标。
 ### 3.2 `GET /env` — 只读环境快照
 **不得**含绝对路径、用户名或环境变量值（只含键名白名单）。
 ```json
@@ -58,7 +58,7 @@ HTTP 语义：`200` 成功、`4xx` 请求或权限错误、`5xx` 后端不可用
  "features":{"sse":true,"demo":false,"readOnly":false,"openCodeCli":true}}
 ```
 `router.nodeBin` 只给可执行名/基名；`features.openCodeCli=false` 时用量页返回 `BACKEND_UNAVAILABLE`。
-### 3.3 `GET /providers` — 八家状态
+### 3.3 `GET /providers` — 十三家状态
 数据源 `node router.mjs list --json`（00 §3.1），逐条映射为 `ProviderStatus` 并补 `drift`（§5.1）；网关条目 `on==up`（叠加层）。
 ```json
 {"providers":[{"id":"qoder-cn","title":"Qoder 国内版","on":true,"up":true,"models":11,"port":8789,
@@ -148,7 +148,7 @@ data: {"provider":"trae-local","seq":41,"chunk":"INFO request ok\n","truncated":
 ```
 `errors` 是网关转发失败计数，与 Provider 离线是两回事。
 ### 3.14 `GET /gateway/balance` — 网关额度
-数据源网关 `GET /v1/gateway/balance`（转发采集器，只覆盖本机 8 家），是 `/quota` 的首选源（§10）。
+数据源网关 `GET /v1/gateway/balance`（转发采集器，只覆盖本机 13 家），是 `/quota` 的首选源（§10）。
 ```json
 {"fetchedAt":"2026-11-12T03:00:00.000Z","providers":[
  {"provider":"workbuddy","kind":"workbuddy","title":"WorkBuddy 国内版","available":true,"serviceRunning":true,

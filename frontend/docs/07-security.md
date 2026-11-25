@@ -1,6 +1,6 @@
 # 07 安全与隐私
 
-状态：设计基线（文档阶段，尚未实现）
+状态：已实现（2026-11-25）
 对应需求：NFR-105/106/110
 适用范围：`frontend/` 桥接服务（`frontend/server/`）、浏览器控制台、日志与任务输出、构建与依赖、只读与演示模式
 上位依据：[00 设计基线](00-design-baseline.md) §11/§12、[`tui/docs/07-security.md`](../../tui/docs/07-security.md)、
@@ -130,8 +130,10 @@ CLI / 网关（既有受信控制层：router.mjs、gateway/）
   };
   ```
 
-- **provider id 白名单**：必须是 00 §4 登记的 9 家（`qoder-cn, qoder, trae-local, codearts,
-  zcode, workbuddy, workbuddy-global, loomy, raccoon`）或 `gateway`；其余一律拒绝。未知 id 默认只读。
+- **provider id 白名单**：必须是 00 §4 登记的十三家（`qoder-cn, qoder, trae-local, codearts,
+  zcode, loomy, raccoon, qwenwork, dumate, lingxi, lobster, workbuddy, workbuddy-global`）或
+  `gateway`；其余一律拒绝。写操作白名单为这十三家 + `gateway`，仍受确认、只读与全局串行约束。
+  未知 id 默认只读。
 - **account key 白名单**：只能取自最近一次 `account <id> --json` 返回的 `accounts[].key`，
   不接受自由文本。
 - **数值范围限制**：`lines ∈ [1, 2000]`、`days ∈ [1, 90]`、`range ∈ {24h,7d,30d,all}`，

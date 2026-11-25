@@ -54,6 +54,8 @@
 | 时间范围换算 | `24h|7d|30d|all` → `from/to` 毫秒区间；边界含当月、DST 与本地时区偏移 |
 | Zod 契约解析 | envelope `{schemaVersion,generatedAt,ok,data?,error?}` 解析；未知字段透传不报错；缺核心字段给出最小范围错误 |
 | 状态推导 | `stale`、`lastSuccessAt`、`receivedAt`、`fetchedAt` 的推导；`steps`、`cost` 仅展示不折算 |
+| Provider 白名单 | `tests/bridge-provider-whitelist.test.ts` 钉住白名单 ⊇ `router.mjs` 真实 id；`tests/provider-coverage.test.ts` 校验 13 家分类色与标题 |
+| usage 模型归一化 | 真实嵌套 `{model:{id,providerID,variant}}` 与扁平夹具都接受；同 `providerID/id` 的 variant 合并，steps/cost/tokens 相加；空 id 丢弃 |
 
 ### 2.2 组件（React Testing Library）
 
@@ -114,8 +116,19 @@
 | URL 即状态 | 选中 provider、时间范围、过滤、排序进 search params；刷新后恢复；后退有效 |
 | 报表 | 五源状态、范围映射、CSV 下载内容、窄屏不溢出、打印入口存在 |
 
-**实测（2026-11-25，demo 桥接）**：11 个 spec 共 **96 passed / 0 failed / 0 skipped**，2.7 分钟；
-`workers=1`、headless、`PANEL_E2E_PORT=8892`。
+**实测（2026-11-25，demo 桥接）**：demo 套件 **103 passed / 9 skipped / 0 failed**；
+`real.spec.ts` 按设计跳过（需 `PANEL_E2E_REAL=1`）。`workers=1`、headless、`PANEL_E2E_PORT=8892`。
+
+真实只读验收是**本地人工链路**，不替代 demo 的确定性 CI：
+
+```bash
+node server/index.mjs --read-only --port 8894
+PANEL_E2E_REAL=1 PANEL_E2E_PORT=8894 npx playwright test e2e/real.spec.ts --workers=1
+```
+
+**实测（2026-11-25，真实只读桥接 8894）**：**9 passed / 0 failed**。断言 14 条 provider
+（13 反代 + `gateway`）、无演示徽标、额度/报表无 `example-`/`demo-`/`slot-a`、用量为真实数值、
+网关返回真实数据；全程只读，不点击任何写操作。
 
 ### 2.6 可访问性
 
@@ -244,6 +257,8 @@ npm run typecheck      # tsc --noEmit
 npm test               # vitest run（单元 + 契约 + 组件 + MSW）
 npm run build          # tsc --noEmit && vite build
 PANEL_E2E_PORT=8892 npx playwright test --workers=1   # 对 --demo 桥接，headless
+node server/index.mjs --read-only --port 8894         # 真实只读桥接（人工验收）
+PANEL_E2E_REAL=1 PANEL_E2E_PORT=8894 npx playwright test e2e/real.spec.ts --workers=1
 ```
 
 > `package.json` 当前没有 `lint` 脚本；ESLint 不在本仓库的验证链路内，门禁是 typecheck + test + build + Playwright。
@@ -253,9 +268,10 @@ PANEL_E2E_PORT=8892 npx playwright test --workers=1   # 对 --demo 桥接，head
 | 检查 | 命令 | 结果 |
 |---|---|---|
 | 类型检查 | `npm run typecheck` | ✅ 0 error |
-| 单元/契约/组件 | `npm test` | ✅ 23 passed + 1 skipped 文件；247 passed + 3 skipped 用例；0 failed |
+| 单元/契约/组件 | `npm test` | ✅ 27 passed + 1 skipped 文件；269 passed + 3 skipped 用例；0 failed |
 | 生产构建 | `npm run build` | ✅ 通过 |
-| E2E（demo） | `PANEL_E2E_PORT=8892 npx playwright test --workers=1` | ✅ 96 passed / 0 failed / 0 skipped，约 2.7 分钟 |
+| E2E（demo） | `PANEL_E2E_PORT=8892 npx playwright test --workers=1` | ✅ 103 passed / 9 skipped / 0 failed（real.spec 按设计跳过） |
+| E2E（真实只读） | `PANEL_E2E_REAL=1 PANEL_E2E_PORT=8894 npx playwright test e2e/real.spec.ts --workers=1` | ✅ 9 passed / 0 failed |
 | axe 深色 | Playwright + axe | ✅ 15 路由页 + 命令面板 0 violation |
 | axe 浅色 | Playwright + axe | ✅ 5 页抽检 0 violation |
 | 响应式 | Playwright 375/768/1440 × 8 页 | ✅ 横向溢出全部为 0（阈值 ≤1） |
@@ -312,7 +328,8 @@ PANEL_E2E_PORT=8892 npx playwright test --workers=1   # 对 --demo 桥接，head
 | R5 | 确认与只读 | 默认焦点取消、危险名单可见、桥接层拦截 403 可断言 |
 | R6 | 脱敏与清理 | 新增日志/输出路径有脱敏与控制序列清理用例 |
 | R7 | 文本解析禁令 | 无正则把人类文本转为结构化字段 |
-| R8 | `PANEL_E2E_PORT=<free> npx playwright test --workers=1` + axe | E2E 全绿、a11y 零 critical/serious，375/768/1440 无横向溢出 |
+| R8 | `PANEL_E2E_PORT=<free> npx playwright test --workers=1` + axe | demo E2E 全绿、a11y 零 violation，375/768/1440 无横向溢出 |
+| R8b | `PANEL_E2E_REAL=1 PANEL_E2E_PORT=8894 npx playwright test e2e/real.spec.ts --workers=1` | 本机真实只读验收 9 项全绿；不作为公共 CI 门禁 |
 | R9 | fixture 安全 | 匿名扫描通过，无真实 token/UID/邮箱/路径 |
 | R10 | 需求追踪 | FR/NFR 段有对应测试映射，改需求必改测试 |
 

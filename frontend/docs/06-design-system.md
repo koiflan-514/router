@@ -170,20 +170,25 @@ Fluent 2 负责「这是什么面 / 什么文字 / 什么状态」，Tailwind �
 
 | Provider | 颜色 | 色相 | 浅色示例 | 深色示例 | token |
 |---|---|---|---|---|---|
-| `codearts` | 紫 | 285 | `#7c3aed` | `oklch(0.72 0.17 288)` | `--provider-codearts` |
-| `qoder-cn` | 青 | 195 | `#0e9aa7` | `oklch(0.78 0.12 195)` | `--provider-qoder-cn` |
-| `qoder` | 蓝 | 250 | `#3355cc` | `oklch(0.72 0.15 250)` | `--provider-qoder` |
-| `trae-local` | 绿 | 150 | `#1f9d5b` | `oklch(0.74 0.16 150)` | `--provider-trae-local` |
-| `workbuddy` | 黄 | 85 | `#b58a00` | `oklch(0.84 0.15 88)` | `--provider-workbuddy` |
-| `workbuddy-global` | 浅紫 | 305 | `#b06bd0` | `oklch(0.80 0.12 305)` | `--provider-workbuddy-global` |
-| `zcode` | 橙 | 55 | `#d97706` | `oklch(0.78 0.15 58)` | `--provider-zcode` |
-| `loomy` | 洋红 | 340 | `#d6337f` | `oklch(0.76 0.18 340)` | `--provider-loomy` |
-| `raccoon` | 红 | 25 | `#c2410c` | `oklch(0.74 0.15 25)` | `--provider-raccoon` |
-| `gateway` | 中性 | — | `#6b7280` | `oklch(0.72 0 0)` | `--provider-gateway` |
+| `codearts` | 紫 | 300 | `#9260da` | `oklch(0.72 0.16 300)` | `--provider-codearts` |
+| `qoder-cn` | 青 | 195 | `#009798` | `oklch(0.74 0.12 195)` | `--provider-qoder-cn` |
+| `qoder` | 蓝 | 255 | `#2b7ad6` | `oklch(0.72 0.14 255)` | `--provider-qoder` |
+| `trae-local` | 绿 | 150 | `#1b9247` | `oklch(0.74 0.14 150)` | `--provider-trae-local` |
+| `workbuddy` | 黄 | 75 / 80 | `#b67c0d` | `oklch(0.80 0.12 80)` | `--provider-workbuddy` |
+| `workbuddy-global` | 浅紫 | 300 | `#8e6ac7` | `oklch(0.74 0.13 300)` | `--provider-workbuddy-global` |
+| `zcode` | 橙 | 50 / 55 | `#cf630d` | `oklch(0.76 0.14 55)` | `--provider-zcode` |
+| `loomy` | 洋红 | 350 | `#cd4290` | `oklch(0.74 0.16 350)` | `--provider-loomy` |
+| `raccoon` | 红 | 25 | `#d24c49` | `oklch(0.74 0.15 25)` | `--provider-raccoon` |
+| `qwenwork` | 天蓝 | 205 | `#0092a7` | `oklch(0.74 0.13 205)` | `--provider-qwenwork` |
+| `dumate` | 绿 | 120 | `#748d00` | `oklch(0.76 0.14 120)` | `--provider-dumate` |
+| `lingxi` | 品红 | 330 | `#b05baa` | `oklch(0.75 0.13 330)` | `--provider-lingxi` |
+| `lobster` | 朱红 | 10 | `#d44567` | `oklch(0.74 0.16 10)` | `--provider-lobster` |
+| `gateway` | 中性 | — | `#5b646f` | `oklch(0.78 0.02 250)` | `--provider-gateway` |
 
 命名约定 `--provider-<id>`；组件与图表**只从该表取值**，禁止在代码里写死 hex，也禁止为同一
 provider 在不同页面换色。id 与 [00 §4](00-design-baseline.md#4-providerregion-与网关的关系) 的
-九家白名单 provider（含 `raccoon`）及 `gateway` 一一对应。
+十三家白名单 provider 及 `gateway` 一一对应。浅色示例取 `:root` 的实际 oklch 换算值，
+深色示例取 `.dark` 的实际 token；改为 CSS 新值时必须同步本表。
 
 ## 4. 排版
 
@@ -302,6 +307,7 @@ provider 在不同页面换色。id 与 [00 §4](00-design-baseline.md#4-provide
 | `Sparkline` | 必须 | 迷你趋势 | 纯 SVG，`data/label/description/fill/dot`；少于 2 点显示占位 |
 | `RingGauge` | 必须 | 环形比例 | `value(0–100\|null)/display/caption/label/size/thickness/color`；`null` 不画弧 |
 | `LiveBadge` | 必须 | 实时状态胶囊 | `kind(gateway/readonly/demo/unknown)/tone/label/hint/pulse`；图标 + 文字 |
+| `ProviderChip` | 必须 | Provider 名称/分类色 | `compact` 只显示名称，`title` 保留 id；完整 id 留给详情抽屉 |
 | `MetricCard` | 必须 | KPI 瓦片 | `label/value/sub/hint/tone/spark/trend/density/accessory/onClick/sparkLabel` |
 | `PageHeader` | 必须 | 页头 | `title/description/actions/as/eyebrow/breadcrumb/density` |
 | `Empty` | 必须 | 空状态 | 加载/空/筛空/错误分别呈现，不只显示 0 |
@@ -366,7 +372,7 @@ LiveBadge 始终「圆点/图标 + 文本」同现，圆点只是装饰，`aria-
 | 对比度取值 | `normal` \| `high` |
 | 默认 | 主题 `dark`、对比度 `normal` |
 | 策略 | `documentElement.classList` 增删 `light`/`dark`/`high-contrast`；`system` 监听 `prefers-color-scheme`，高对比同时监听 `prefers-contrast: more` |
-| 入口 | 顶栏主题菜单（含高对比）；设置页只切主题三态 |
+| 入口 | 顶栏主题菜单（含高对比）；设置页外观卡同时提供主题三态与对比度（标准/高对比） |
 
 ```tsx
 // App.tsx：包根布局；默认 dark，storageKey 与实现约定一致

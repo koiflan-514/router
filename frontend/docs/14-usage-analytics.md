@@ -120,7 +120,7 @@ GET /api/experimental/session/stats
 | 活跃日 | `activeDays` | 有活动的天数 | 原样展示 |
 | 连续活跃 | `streak` | 连续活跃天数 | 原样展示，不做趋势推断 |
 | 每日活动 | `activity[].date` / `.steps` | 面积图的逐日 steps | 空数组即空状态，不生成随机曲线 |
-| 模型聚合 | `models[]` | 模型 / Provider 聚合，按 steps 降序 | 未知 providerID 原样显示并用中性色 |
+| 模型聚合 | `models[]` | 模型 / Provider 聚合，按 steps 降序 | 真实形状是嵌套 `{model:{id,providerID,variant}}`；桥接摊平并按 `providerID/id` 合并 variant。未知 providerID 原样显示并用中性色 |
 | 范围 | `range.from` / `range.to` | 本次查询的毫秒边界 | 用于角标标注范围 |
 
 三条必须写进实现的强调：
@@ -128,6 +128,10 @@ GET /api/experimental/session/stats
 1. **`steps` ≠ HTTP 请求数**：它是 OpenCode 会话步骤，可表示活动规模，但不等于模型调用次数。
 2. **缓存读写不重复累计**：`cache.read` / `cache.write` 单独成列，「Token 构成」只算输入+输出+推理。
 3. **`cost` 仅是 OpenCode 上报值**：`cost=0` 是接口返回值，不解释为「没有消耗积分」。
+
+**模型 variant 合并口径**：真实 `stats.models[]` 中同一模型可能有多个 variant 行。桥接按
+`providerID/id` 合并为一行，`steps`/`cost`/`tokens` 逐字段相加；不补假模型、不补假数值，空 id 丢弃。
+demo 夹具是扁平结构，所以该差异只在真实模式暴露（见 [13 §3.1](13-implementation-status.md)）。
 
 ## 5. 时间范围
 
@@ -168,12 +172,12 @@ GET /api/experimental/session/stats
 
 Token 构成（输入+输出+推理）        缓存读写（另计，不并入构成）
   ◕ 4.20M                          缓存总量 ▓▓▓▓▓░░
-  输入 2.80M · 输出 1.10M          读 0.90M（输入 32%）· 写 0.20M（输入 7%）
+  输入 2.80M · 输出 1.10M          读 6.44M（2.3× 输入）· 写 0.20M（7.0% 输入）
   推理 0.30M
 
 工具可靠性 ◕ 96.4%                 缓存效率
-调用 430 · 成功 412 · 失败 15      缓存读 / 输入 32%  ▓▓▓░░
-未完成 3                            缓存写 / 输入 7%   ▓░░░░
+调用 430 · 成功 412 · 失败 15      缓存读 / 输入 2.3×  ▓▓▓░░
+未完成 3                            缓存写 / 输入 7.0%   ▓░░░░
 
 模型 / Provider（可按各数值列或名称排序）
 ┌───────────────────┬────────────┬────────┬────────┬────────┬──────┬────────┬──────┬────────┐
@@ -245,7 +249,7 @@ Token 构成（输入+输出+推理）        缓存读写（另计，不并入�
 |---|---|---|
 | Token 构成环 | 只含 `input + output + reasoning`；中心显示合计 | 三项全 0 时不画环，但缓存读写仍可单独展示 |
 | 缓存读写堆叠条 | 只含 `cache.read + cache.write`，独立于构成环 | 无缓存字段或两者均 0 时显示空状态 |
-| 缓存效率 | `cache.read / input`、`cache.write / input` | 输入为 0 时显示 `—`，不做除法 |
+| 缓存效率 | `cache.read / input`、`cache.write / input`；比例 `>1` 用倍数（如 `21.7× 输入`），`0 < 比例 ≤ 1` 用百分比，`input=0`/未知显示 `—` | 绝对 Token 数不截断；`cacheRatioText()` 有单测（覆盖 12.3456→`12.3×`、9.876→`9.88×`、0→`0.0%`） |
 | 工具可靠性 | `tools.totals` 的成功率；调用/成功/失败/未完成分列 | 无调用（分母为 0）时不显示 0% 或 100% 假值 |
 
 缓存读写**不并入** Token 构成；工具成功率**不代替**模型请求成功率。
@@ -294,7 +298,8 @@ Token 构成（输入+输出+推理）        缓存读写（另计，不并入�
 | `30d` | 30 | |
 | `all` | 90 | 桥接自然日分片上限 90 天；页面明确写「网关部分只覆盖近 90 天」 |
 
-- 摘要逐源标注 `正常/旧数据/失败/加载中/空`；空 = 查询成功但没有数据，不等于 0。
+- 摘要逐源标注 `正常/旧数据/失败/加载中/空`；空 = 查询成功但没有数据，不等于 0；**失败也不得当作空**
+  （失败给错误原因，空给范围提示，二者不共用文案）。
 - KPI：会话/步骤、Token 构成、上报成本、活跃/连续、工具成功率、额度覆盖（只统计来源可用性）。
 - 趋势：按天 Tokens（仅数据真带按日 Token 时）、Provider Top、模型 Top；网关快照独立成块。
 - 导出：CSV 为明细（KPI、按日、Provider、模型、网关按天/Provider、额度桶与 Provider 状态），
@@ -307,7 +312,8 @@ Token 构成（输入+输出+推理）        缓存读写（另计，不并入�
   全部沿用 Fluent 2 token（[06 设计系统](06-design-system.md)）。
 - **Provider 分类色**（稳定映射，与 TUI 一致）：`codearts` 紫 · `qoder-cn` 青 · `qoder` 蓝 ·
   `trae-local` 绿 · `workbuddy` 黄 · `workbuddy-global` 浅紫 · `zcode` 橙 · `loomy` 洋红 ·
-  `raccoon` 红 · `gateway` 中性。未知 providerID 用中性色并原样显示 ID。
+  `raccoon` 红 · `qwenwork` 天蓝 · `dumate` 绿 · `lingxi` 品红 · `lobster` 朱红 ·
+  `gateway` 中性。未知 providerID 用中性色并原样显示 ID。
 - **语义色**：`accent / success / warning / error / muted / selected / border / background /
   foreground`，实现为 Fluent 语义 token + shadcn 兼容映射，支持 dark/light/system 与高对比。
 - **状态不只靠颜色**：数值、单位、图例、文本同时存在。
@@ -332,7 +338,7 @@ Token 构成（输入+输出+推理）        缓存读写（另计，不并入�
 
 - 桥接 `range` → `from`/`to` 换算正确（24h/7d/30d/all），默认 7d，`to` 为查询时刻。
 - 字段解析与 providerID → provider 分类色映射正确；未知 ID 不崩。
-- 「Token 构成」= 输入+输出+推理；缓存读/写**不**并入。
+- 「Token 构成」= 输入+输出+推理；缓存读/写**不**并入；缓存比例按 §6.6 的倍数/百分比规则显示。
 - 模型表按 steps 降序；排序与范围写入 search params 并可分享 / 回退。
 - `steps` 在任何文案、tooltip、导出中都不显示为「请求数」。
 - 空 / stale / 错误 / 演示四种状态按 §8 呈现；OpenCode 不可用不影响其它页。

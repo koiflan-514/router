@@ -1,6 +1,6 @@
 # 04 技术架构
 
-状态：设计基线（文档阶段，尚未实现）
+状态：已实现（2026-11-25）
 对应需求：NFR-101–110（工程结构、性能预算、可测试性、安全边界）
 
 本文固定 `frontend/` 网页面板的**目录、模块边界、数据流、写操作模型与桥接服务架构**。
@@ -13,7 +13,7 @@
 
 1. **UI 不阻塞**：网络、进程探测、日志读取、长时间登录一律不占用交互线程；任一数据源慢或挂住，
    页面仍可切页、可操作。
-2. **独立数据源独立失败**：8 家 provider、网关、OpenCode、日志、健康各自是独立的因果链，
+2. **独立数据源独立失败**：十三家 provider、网关、OpenCode、日志、健康各自是独立的因果链，
    一家失败不升级为全局失败，旧数据保留并标 `stale`。
 3. **写操作有状态机**：不以"按钮按下"推断成功；`Queued → Running → Succeeded/Failed → Refreshing → Confirmed/RefreshFailed`。
 4. **无凭证可测**：`--demo` 桥接使用匿名 fixtures，不 spawn 进程、不读真实文件，即可渲染全部页面与命令映射。
@@ -72,7 +72,7 @@ HTTP，**不在 JS 里重写**进程管理、账号切换、额度采集或网�
 | 障碍 | 说明 |
 |---|---|
 | 无 CORS | 网关按回环单用户设计，未返回 `Access-Control-Allow-Origin`；浏览器跨源请求直接被 CORS 拦截 |
-| 不能控制进程 | 网关没有"启停八家"的 HTTP 端点；启停必须走 CLI spawn，浏览器做不到 |
+| 不能控制进程 | 网关没有"启停十三家"的 HTTP 端点；启停必须走 CLI spawn，浏览器做不到 |
 | 凭证注入 | 桥接集中持有回环 token 与 `x-panel-token`；浏览器不接触上游 key |
 | 响应头语义 | `x-router-*` 响应头在代理层可保留并归一化，直连则被 CORS 白名单吞掉 |
 
@@ -275,7 +275,7 @@ Draft
 
 ### 8.3 串行与去重
 
-- **全局串行**：八家规模小，写任务进单一队列，前一任务终态后才起下一个（简单、可解释优先）。
+- **全局串行**：十三家规模仍小，写任务进单一队列，前一任务终态后才起下一个（简单、可解释优先）。
 - **去重**：相同 `(action, providerIds, accountKey)` 在 `Queued`/`Running` 期间重复提交直接复用原
   `actionId`，不重复 spawn。
 - **只读并发**：只读刷新受控并发（每数据源最多一个在途），不受写队列阻塞。
@@ -290,14 +290,24 @@ Draft
 ```text
 frontend/server/
 ├── index.mjs        # HTTP 服务器入口、路由分发、token 校验、静态托管
-├── spawn.mjs · cli.mjs  # 参数数组 spawn + router.mjs 子命令封装（list/account/logs/doctor/actions…）
+├── cli.mjs          # 参数数组 spawn + router.mjs 子命令封装（list/account/logs/doctor/actions…）
+├── normalize.mjs    # CLI legacy 字段 → 领域模型、drift/overlay 推导、usage models 归一化
 ├── gateway.mjs      # 网关 HTTP 代理（/v1/gateway/*、/health、get /v1/models）
-├── map.mjs          # CLI legacy 字段 → 领域模型映射、drift 推导
 ├── sse.mjs          # SSE 通道：日志跟随、事件流、任务流
-├── cleanup.mjs      # ANSI/OSC 剥离 + 密钥脱敏 + 行数/行长上限
-├── config.mjs       # root/node 发现、端口、read-only/demo 开关
-└── demo/            # 匿名 fixtures（与 fixtures/ 同源）
+├── redact.mjs       # ANSI/OSC 剥离 + 密钥/身份脱敏
+├── demo.mjs         # 匿名 fixtures（与 fixtures/ 同源）、--demo 数据端点
+└── dev.mjs          # 并行拉起桥接与 Vite
 ```
+
+**provider 白名单与 usage 归一化**：
+
+- `normalize.mjs` 的 `PROVIDER_IDS` 固定十三家反代顺序；`ACTION_PROVIDER_WHITELIST` 为这十三家
+  加 `gateway` 叠加层。新增 provider 时两处白名单与 `src/lib/provider.ts` 同步修改，测试会比对
+  `router.mjs list --json` 的真实 id。
+- 真实 `opencode` 的 `stats.models[]` 是嵌套 `{ model: { id, providerID, variant } }`，而前端契约
+  要求扁平 `{ id, providerID, steps, tokens, cost }`。`normalizeUsageModels()` 同时接受嵌套与扁平，
+  并按 `providerID/id` 合并同一模型的不同 variant（steps/cost/tokens 逐字段相加），空 id 丢弃。
+  demo 夹具是扁平结构，因此这个差异只在真实模式暴露（见 [13 实现状态](13-implementation-status.md)）。
 
 | 关注点 | 做法 |
 |---|---|
@@ -360,7 +370,7 @@ server: { host: '127.0.0.1', port: 5173,
 
 ### 11.2 性能与资源预算
 
-- 8 家 provider 下的状态汇总保持 **O(n)**，不做全量重算排序。
+- 十三家 provider 下的状态汇总保持 **O(n)**，不做全量重算排序。
 - 单 provider 日志视图最多保留 **2000 行**；任务输出同样设上限，超限标记 `truncated`。
 - 同 `queryKey` 并发查询**去重**；桥接对同数据源只读请求也去重。
 - `document.hidden` 时**暂停**轮询与 SSE，恢复可见立即补一次。
@@ -369,8 +379,11 @@ server: { host: '127.0.0.1', port: 5173,
 
 ## 12. 可扩展方向
 
-- **新 provider 数据驱动**：新增第九家只需扩展桥接映射层与契约枚举，前端按 provider 列表渲染，
-  不写死数量与颜色（颜色映射见 [06 设计系统](06-design-system.md)）。
+- **新 provider 数据驱动**：新增 provider 时，桥接 `server/normalize.mjs` 的 `PROVIDER_IDS` 与
+  前端 `src/lib/provider.ts` 的 `PROVIDER_IDS` 必须一起改，并补分类色与中文标题；
+  `tests/bridge-provider-whitelist.test.ts` 会比对白名单 ⊇ `router.mjs` 的真实 id，
+  `tests/provider-coverage.test.ts` 校验十三家的色/标题。前端按 provider 列表渲染，
+  不写死数量（颜色映射见 [06 设计系统](06-design-system.md)）。
 - **逐请求遥测另立契约**：用量页当前来自 OpenCode 官方只读统计（`experimental.session.stats`），
   不从进程日志反推 Token 或费用；将来若做逐请求遥测，应新增**独立契约与端点**，而不是把日志正则
   解析伪装成指标（同 [TUI §16](../../tui/docs/04-architecture.md)）。
