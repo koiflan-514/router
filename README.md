@@ -207,10 +207,14 @@ npm run start -- --read-only # 只读：写操作在桥接层被拒绝
 设置，共 15 个路由页；视觉基线为 Fluent 2（Mica/Acrylic、语义状态色、focus rectangle、150/250ms 动效），
 保留 shadcn 变量名作兼容映射。安全语义与 TUI 一致：危险操作显式确认、写任务串行、只读/演示在桥接层拦截、
 日志/任务输出脱敏。网页面板覆盖 **13 家反代 + `gateway` 叠加层**（包含千问办公、百度搭子、
-WPS 灵犀、有道龙虾），写操作白名单同样覆盖它们。验证：`npm test` 269 passed（27 文件 + 1 skipped）、
+WPS 灵犀、有道龙虾），写操作白名单同样覆盖它们。验证：`npm test` 286 passed + 3 skipped（共 289 用例，
+30 文件 + 1 skipped）、`npm run typecheck` 0 error、`npm run build` 通过、
 demo Playwright 103 passed / 9 skipped、真实只读 E2E 9 passed、axe 0 violation、
 375/768/1440 × 8 页无横向溢出。demo E2E 是确定性 CI；真实只读 E2E 是本地人工/验收链路，
 不替代 CI，也不在公共 CI 使用真实凭证。
+真实只读验收要点（不是 CI）：`/api/providers` 返回 14 条（13 反代 + `gateway`）；`/api/quota` 首次约 24s
+（网关 `/v1/gateway/balance` 本身慢，桥接该路径超时已放宽到 45s），期间页面显示「正在读取额度…」而不是
+空态；调度快照只对有用量样本的上游显示成功率，从未被调用的显示 `—` 而非 `0.0%`。
 设计与契约见 [frontend/README.md](frontend/README.md) 和 [frontend/docs/](frontend/docs/README.md)。
 
 ### 更新模型列表

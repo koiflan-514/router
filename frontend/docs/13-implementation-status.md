@@ -59,7 +59,7 @@
 | 检查 | 命令 | 结果 |
 |---|---|---|
 | 类型检查 | `npm run typecheck` | ✅ 0 错误 |
-| 单元 + 契约 + 组件 | `npm test` | ✅ 27 passed + 1 skipped 文件；**269 passed + 3 skipped** 用例；0 failed |
+| 单元 + 契约 + 组件 | `npm test` | ✅ 30 passed + 1 skipped 文件；**286 passed + 3 skipped** 用例（共 289 用例）；0 failed |
 | 生产构建 | `npm run build` | ✅ 通过（`tsc --noEmit && vite build`） |
 | E2E（demo） | `PANEL_E2E_PORT=8892 npx playwright test --workers=1` | ✅ **103 passed / 9 skipped / 0 failed**（real.spec 按设计跳过） |
 | E2E（真实只读） | `PANEL_E2E_REAL=1 PANEL_E2E_PORT=8894 npx playwright test e2e/real.spec.ts --workers=1` | ✅ **9 passed / 0 failed**；只读，不点写操作 |
@@ -83,6 +83,32 @@ demo 夹具长期使用扁平 `{ id, providerID, steps, ... }`，桥接此前原
 模式下被 Zod 判为 `CONTRACT_INVALID`。`normalize.mjs` 的 `normalizeUsageModels()` 现在同时接受两种形状，
 按 `providerID/id` 合并 variant（steps/cost/tokens 逐字段相加），空 id 丢弃；`tests/usage-normalize.test.ts`
 覆盖嵌套、扁平、variant 合并与空 id。
+
+### 3.1.1 调度成功率：无样本 ≠ 0%
+
+真实 `/v1/gateway/status` 的 16 个上游里，只有真正被调用过的（`lastUsedAt > 0`）才有成功率样本；
+其余 `successRate=0` 是「没有样本」而不是「一直失败」，此前 15 家全被画成 `0.0%`。现在：
+
+- 桥接 `normalize.mjs` 透传 `lastUsedAt`，契约 `contract.ts` / `schemas.ts` 同步加 `lastUsedAt: number | null`；
+- `SchedulerLane.successRate` 改为 `number | null`：`lastUsedAt` 缺失或为 0 → `null`，卡片显示 `—` +
+  小字「尚无调用样本」+ 解释性 `title`，**不渲染 0% 进度条**；有 `lastUsedAt` 且 `successRate=0` 仍显示 `0.0%`；
+- 本机实测：仅 `codearts` 有样本（`successRate=1`），其余 12 家反代与 `ollama`/`lmstudio`/`llamacpp`
+  均无样本。demo 覆盖两种状态（含一条从未调用的 `zcode`）。
+
+### 3.1.2 额度加载中 ≠ 空
+
+真实 `/api/quota` 首次约 24s（网关 `/v1/gateway/balance` 本身慢，桥接该路径超时已放宽到 45s），此前
+加载中被渲染成「额度接口未返回来源」/「没有额度数据」。现在区分三态：加载中（`正在读取额度…`，
+`role="status"`）/ 失败（`额度数据读取失败`）/ 真空（原空态）；KPI「额度可领取」加载中显示 `…`，
+矩阵额度列加载中显示灰字 `读取中`（`title` 说明 `—` 不代表没有额度），加载完成后恢复真实值。
+这是「不要把加载态断言成空态」的通用原则。
+
+### 3.1.3 网关三页 provider chip 去重
+
+`/gateway`（调度）、`/gateway/combos`（降级链）、`/gateway/usage`（网关用量）改用 `ProviderChip compact`：
+可见文本只有中文名，id 进 `title`/`aria-label`，不再出现 `qoder-cn qoder-cn` 这类重复；未知 id
+（`ollama`/`lmstudio`/`llamacpp`）回落成 id 本身，不重复。服务页、诊断页、设置页与详情抽屉仍保留完整
+「名称 + id」，这是刻意不同。
 
 ### 3.2 真实只读 API 样例（本机，2026-11-25）
 

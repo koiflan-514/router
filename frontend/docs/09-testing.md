@@ -60,10 +60,12 @@
 ### 2.2 组件（React Testing Library）
 
 对每个 feature 断言**加载／空／错误／stale／只读**五态齐全，且状态不只靠颜色。
+其中「加载中」不得被断言或渲染成「空」：真实 `/api/quota` 首次约 24s，首屏加载态必须与
+「成功但 0 行」分开（见 §2.5 真实模式注意点）。
 
 | 页面（ID） | 必测渲染 |
 |---|---|
-| `overview` | 正常、混合漂移、局部失败、首次加载（`—`）、stale 角标 |
+| `overview` | 正常、混合漂移、局部失败、首次加载（`—`）、stale 角标；额度三态（加载中「正在读取额度…」/ 失败 / 空） |
 | `providers` | 操作中（pending 不预改状态）、只读、普通确认、高风险确认、成功后刷新未确认 |
 | `quota` | 多单位、多账号、空桶、可领取、活动关闭、`fetchedAt` 过期 |
 | `accounts` | 单账号、多账号、空账号、dry-run 预览、平台不支持 |
@@ -71,7 +73,7 @@
 | `diagnostics` | 环境错误、健康部分失败、真实试打加强确认（默认折叠） |
 | `usage` | 六 KPI、双模式活动图、Token 构成、工具可靠性、缓存效率、模型表排序、CSV 导出；空活动、旧数据 stale |
 | `reports` | 五源状态、结论按数据生成、范围映射、CSV/JSON 导出、打印样式；空/失败/stale |
-| `gateway/*` | 调度 lane、用量双轴/Token 图、降级链阶梯、密钥（只显示 SHA-256 摘要）、免费供应商只读、本地应答 |
+| `gateway/*` | 调度 lane（成功率三态：有样本 / 真 0% / 无样本 `—`）、用量双轴/Token 图、降级链阶梯、密钥（只显示 SHA-256 摘要）、免费供应商只读、本地应答；三页 chip 为 `compact` |
 | `settings` | 主题、对比度、刷新间隔、只读、桥接连接、演示模式切换 |
 
 组件层通用断言：
@@ -129,6 +131,16 @@ PANEL_E2E_REAL=1 PANEL_E2E_PORT=8894 npx playwright test e2e/real.spec.ts --work
 **实测（2026-11-25，真实只读桥接 8894）**：**9 passed / 0 failed**。断言 14 条 provider
 （13 反代 + `gateway`）、无演示徽标、额度/报表无 `example-`/`demo-`/`slot-a`、用量为真实数值、
 网关返回真实数据；全程只读，不点击任何写操作。
+
+真实模式的几个注意点（都是「加载态不等于空态」的具体形态，写断言时别踩）：
+
+- **`/api/quota` 首次约 24s**：网关 `/v1/gateway/balance` 本身慢，桥接该路径超时已放宽到 45s。
+  E2E 必须先等额度三态里的「加载完成」，不能把首屏的加载态断言成空态或少数据。
+- 额度加载中：右栏额度 Top 为 `正在读取额度…`（`role="status"`），KPI「额度可领取」为 `…`，
+  矩阵额度列为灰字 `读取中`（`title` 说明 `—` 不代表没有额度）；失败为「额度数据读取失败」；
+  只有成功且 0 行才是原空态。
+- **调度成功率无样本不显示 0%**：`/v1/gateway/status` 的 16 个上游里只有被调用过的（`lastUsedAt > 0`）
+  有样本，其余显示 `—` + 「尚无调用样本」且不画进度条；真实只读验收时不要断言「全部上游都有成功率」。
 
 ### 2.6 可访问性
 
@@ -268,7 +280,7 @@ PANEL_E2E_REAL=1 PANEL_E2E_PORT=8894 npx playwright test e2e/real.spec.ts --work
 | 检查 | 命令 | 结果 |
 |---|---|---|
 | 类型检查 | `npm run typecheck` | ✅ 0 error |
-| 单元/契约/组件 | `npm test` | ✅ 27 passed + 1 skipped 文件；269 passed + 3 skipped 用例；0 failed |
+| 单元/契约/组件 | `npm test` | ✅ 30 passed + 1 skipped 文件；286 passed + 3 skipped 用例（共 289 用例）；0 failed |
 | 生产构建 | `npm run build` | ✅ 通过 |
 | E2E（demo） | `PANEL_E2E_PORT=8892 npx playwright test --workers=1` | ✅ 103 passed / 9 skipped / 0 failed（real.spec 按设计跳过） |
 | E2E（真实只读） | `PANEL_E2E_REAL=1 PANEL_E2E_PORT=8894 npx playwright test e2e/real.spec.ts --workers=1` | ✅ 9 passed / 0 failed |

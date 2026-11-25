@@ -307,7 +307,7 @@ provider 在不同页面换色。id 与 [00 §4](00-design-baseline.md#4-provide
 | `Sparkline` | 必须 | 迷你趋势 | 纯 SVG，`data/label/description/fill/dot`；少于 2 点显示占位 |
 | `RingGauge` | 必须 | 环形比例 | `value(0–100\|null)/display/caption/label/size/thickness/color`；`null` 不画弧 |
 | `LiveBadge` | 必须 | 实时状态胶囊 | `kind(gateway/readonly/demo/unknown)/tone/label/hint/pulse`；图标 + 文字 |
-| `ProviderChip` | 必须 | Provider 名称/分类色 | `compact` 只显示名称，`title` 保留 id；完整 id 留给详情抽屉 |
+| `ProviderChip` | 必须 | Provider 名称/分类色 | `compact` 只显示名称，`title`/`aria-label` 保留 id；完整 id 留给详情抽屉 |
 | `MetricCard` | 必须 | KPI 瓦片 | `label/value/sub/hint/tone/spark/trend/density/accessory/onClick/sparkLabel` |
 | `PageHeader` | 必须 | 页头 | `title/description/actions/as/eyebrow/breadcrumb/density` |
 | `Empty` | 必须 | 空状态 | 加载/空/筛空/错误分别呈现，不只显示 0 |
@@ -317,6 +317,10 @@ provider 在不同页面换色。id 与 [00 §4](00-design-baseline.md#4-provide
 | Kbd | 可选 | 快捷键提示 | 帮助页、命令面板、日志暂停/跟随 |
 
 原则：状态真值只来自 §2 语义色 + 文字/图标；Toast 只做**瞬时反馈**，不得成为唯一状态来源。
+`ProviderChip compact` 的可见文本只有中文名，provider id 进 `title` 与 `aria-label`；网关三页
+（`/gateway` 调度、`/gateway/combos` 降级链、`/gateway/usage` 网关用量）统一用它，不再出现
+`qoder-cn qoder-cn` 这类「名称 + id」重复；未知 id（`ollama`/`lmstudio`/`llamacpp`）回落成 id 本身，
+也不重复。服务页、诊断页、设置页与详情抽屉仍保留完整「名称 + id」，这是刻意不同。
 `MetricCard` 的 `spark`/`trend` 会自动生成 `sr-only` 摘要并通过 `aria-describedby` 关联；
 `Sparkline` 默认 `aria-hidden`，只有传 `label` 时才作为 `role="img"` 暴露给读屏。
 

@@ -286,6 +286,21 @@ Token 构成（输入+输出+推理）        缓存读写（另计，不并入�
 桥接层必须把两者映射为**不同的 query key 与不同的领域类型**，避免缓存串用；UI 文案也不得
 把 `steps` 与 `requests` 混称。
 
+**调度成功率的样本口径（无样本 ≠ 0%）。** `/v1/gateway/status` 的每个上游都带 `successRate`，但只有
+真正被调用过的上游才有样本：真实快照 16 个上游里，`lastUsedAt` 缺失或为 0 的从未被调用，其
+`successRate=0` 表示「没有样本」而不是「一直失败」。因此：
+
+| 网关字段 | 领域模型 `SchedulerLane` | 卡片呈现 |
+|---|---|---|
+| `lastUsedAt` 缺失 / 0 | `successRate: null`（`lastUsedAt: null`） | 数值 `—` + 小字「尚无调用样本」+ 解释性 `title`（说明 0% 不代表持续失败）；**不渲染 0% 进度条** |
+| `lastUsedAt > 0` 且 `successRate = 0` | `successRate: 0` | 照常显示 `0.0%`（确有样本且全失败，不能被吞成未知） |
+| `lastUsedAt > 0` 且 `successRate > 0` | 原样数值 | 百分比 + 进度条 |
+
+桥接 `normalize.mjs` 的 `toGatewayProviderSnap()` 透传 `lastUsedAt`，网关快照契约
+（`contract.ts` / `schemas.ts`）同步加 `lastUsedAt: number | null`。本机实测分布：
+仅 `codearts` 有调用样本（`successRate=1`），其余 12 家反代与 `ollama`/`lmstudio`/`llamacpp` 三个本地端点
+均无样本，全部走 `—` 分支。
+
 ### 7.1 报表页 `/reports`
 
 报表页只消费五个现有只读查询（`useUsage`/`useQuota`/`useProviders`/`useGatewayUsage`/`useGatewayStatus`），
@@ -344,6 +359,11 @@ Token 构成（输入+输出+推理）        缓存读写（另计，不并入�
 - 空 / stale / 错误 / 演示四种状态按 §8 呈现；OpenCode 不可用不影响其它页。
 - 面积图角标同时展示范围与上报成本（含未上报的 `—`）。
 - Token 构成环只含输入/输出/推理；缓存读写独立；工具成功率无分母时不显示假值。
+- 调度成功率按样本口径呈现：`lastUsedAt` 缺失/0 → `—` + 「尚无调用样本」且不画 0% 条；有 `lastUsedAt`
+  的真 `0%` 仍显示 `0.0%`（见 §7）。
+- 额度三态：加载中显示「正在读取额度…」（`role="status"`）、失败显示「额度数据读取失败」、成功但 0 行才是
+  原空态；KPI「额度可领取」加载中为 `…`，矩阵额度列加载中为灰字「读取中」且 `title` 说明 `—` 不代表没有额度。
+  **不要把加载态断言成空态**（真实 `/api/quota` 首次约 24s）。
 - CSV 导出当前视图（BOM + 转义），报表页 CSV/JSON 导出与打印可用。
 - 报表页网关窗口映射固定为 24h→1、7d→7、30d→30、all→90，且页面明示。
 - 契约测试用 Zod 校验 `{data:{...}}` 形状，字段 additive 兼容。

@@ -62,7 +62,7 @@ npm run start -- --demo
 
 ```bash
 npm run typecheck                # tsc --noEmit
-npm test                         # vitest：27 passed + 1 skipped 文件；269 passed + 3 skipped 用例
+npm test                         # vitest：30 passed + 1 skipped 文件；286 passed + 3 skipped 用例（共 289）
 npm run build                    # 生产构建（桥接随后托管 dist）
 PANEL_E2E_PORT=8892 npx playwright test --workers=1   # E2E（demo，headless，103 passed / 9 skipped）
 PANEL_REAL_SMOKE=1 npx vitest run tests/bridge-real.test.ts   # 可选：真实只读冒烟
@@ -78,6 +78,13 @@ PANEL_E2E_REAL=1 PANEL_E2E_PORT=8894 npx playwright test e2e/real.spec.ts --work
 体积与兼容：Playwright 对 `--demo` 桥接跑真实生产代码路径，不 spawn 进程、不读真实文件；
 axe 深色 15 路由页 + 命令面板、浅色 5 页抽检均为 0 violation；375/768/1440 × 8 关键页无横向溢出。
 真实模式只读、默认不点写操作，断言 13 家 + 网关、无演示徽标、额度/用量/报表来自真实接口。
+
+真实只读验收要点（本机链路，不是 CI）：
+
+- `/api/providers` 返回 14 条（13 反代 + `gateway`）。
+- `/api/quota` 首次约 24s 属正常：网关 `/v1/gateway/balance` 本身慢，桥接该路径超时已放宽到 45s；
+  期间页面显示「正在读取额度…」（KPI 为 `…`、矩阵额度列为「读取中」），而不是空态。
+- 调度快照只对有用量样本的上游（`lastUsedAt > 0`）显示成功率，从未被调用的显示 `—`，**不显示 0%**。
 
 ## 页面
 
