@@ -162,7 +162,9 @@ export interface SchedulerLane {
   inFlight: number;
   /** 相对本批最大并发的百分比（至少 1 作为分母）。 */
   loadPct: number;
-  successRate: number;
+  successRate: number | null;
+  /** 最近一次调用时间；null/0 表示从未调用。 */
+  lastUsedAt: number | null;
   consecutiveFails: number;
   sticky: number;
   quotaRatio: number | null;
@@ -188,6 +190,11 @@ export function schedulerLanes(providers: GatewayProviderSnap[], now: number): S
         : provider.inFlight > 0
           ? 'busy'
           : 'running';
+    const lastUsedAt =
+      typeof provider.lastUsedAt === 'number' && provider.lastUsedAt > 0 ? provider.lastUsedAt : null;
+    // 没有样本 = 没有 lastUsedAt，或 lastUsedAt 缺失但仍被兜底成 0。
+    // 反过来，successRate=0 且确有 lastUsedAt 是真的全失败，必须保留 0。
+    const successRate = lastUsedAt === null ? null : provider.successRate;
     return {
       id: provider.id,
       status,
@@ -199,7 +206,8 @@ export function schedulerLanes(providers: GatewayProviderSnap[], now: number): S
       inFlight: provider.inFlight,
       loadPct:
         maxInFlight > 0 ? Math.max(0, Math.min(100, (provider.inFlight / Math.max(1, maxInFlight)) * 100)) : 0,
-      successRate: provider.successRate,
+      successRate,
+      lastUsedAt,
       consecutiveFails: provider.consecutiveFails,
       sticky: provider.sticky ?? 0,
       quotaRatio: provider.quotaRatio,

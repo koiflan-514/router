@@ -73,6 +73,7 @@ describe('gateway-model 调度 lane', () => {
     weight: 10,
     inFlight: 2,
     successRate: 0.99,
+    lastUsedAt: now - 10_000,
     cooldownUntil: now + 60_000,
     cooldownKind: 'rate_limit',
     sticky: 2,
@@ -83,6 +84,7 @@ describe('gateway-model 调度 lane', () => {
     weight: 5,
     inFlight: 1,
     successRate: 0.5,
+    lastUsedAt: now - 20_000,
     cooldownUntil: now - 1,
   });
   const p3 = gatewayProviderSnapSchema.parse({ id: 'off', running: false, weight: 0 });
@@ -95,6 +97,41 @@ describe('gateway-model 调度 lane', () => {
     expect(lanes[1].status).toBe('busy');
     expect(lanes[2].status).toBe('stopped');
     expect(lanes[2].weightPct).toBe(0);
+    // p3 从未被调用过：成功率没有样本，不能显示 0%。
+    expect(lanes[0].successRate).toBe(0.99);
+    expect(lanes[1].successRate).toBe(0.5);
+    expect(lanes[2].successRate).toBeNull();
+    expect(lanes[2].lastUsedAt).toBeNull();
+  });
+
+  it('lastUsedAt=0 且 successRate=0 表示无样本，成功率是 null', () => {
+    const never = gatewayProviderSnapSchema.parse({
+      id: 'zcode',
+      running: true,
+      weight: 7.5,
+      successRate: 0,
+      lastUsedAt: 0,
+    });
+    const lane = schedulerLanes([never], now)[0];
+    expect(lane.successRate).toBeNull();
+    expect(lane.lastUsedAt).toBeNull();
+
+    // lastUsedAt 缺失（兜底成 null）同样是没样本。
+    const missing = gatewayProviderSnapSchema.parse({ id: 'no-ts', running: true, successRate: 0 });
+    expect(schedulerLanes([missing], now)[0].successRate).toBeNull();
+  });
+
+  it('有 lastUsedAt 的 0% 是全失败样本，不能被吞成 null', () => {
+    const used = gatewayProviderSnapSchema.parse({
+      id: 'workbuddy',
+      running: true,
+      weight: 3,
+      successRate: 0,
+      lastUsedAt: now - 5_000,
+    });
+    const lane = schedulerLanes([used], now)[0];
+    expect(lane.successRate).toBe(0);
+    expect(lane.lastUsedAt).toBe(now - 5_000);
   });
 
   it('冷却缺失或过期时不显示倒计时', () => {

@@ -478,9 +478,10 @@ const GATEWAY_STATUS = {
   quotaSnapshotAt: 1762912800000,
   settings: { maxAttempts: 3, topN: 3, maxInFlight: 4 },
   providers: [
-    { id: 'trae-local', running: true, dialect: 'openai', port: 8787, weight: 12.5, quotaRatio: 0.62, inFlight: 1, consecutiveFails: 0, successRate: 0.984, cooldownUntil: 0, cooldownKind: 0, stickySessions: 2 },
-    { id: 'qoder-cn', running: true, dialect: 'both', port: 8789, weight: 9.1, quotaRatio: 0.66, inFlight: 0, consecutiveFails: 0, successRate: 0.997, cooldownUntil: 0, cooldownKind: 0, stickySessions: 0 },
-    { id: 'workbuddy', running: false, dialect: null, port: null, weight: 0, quotaRatio: null, inFlight: 0, consecutiveFails: 4, successRate: 0.5, cooldownUntil: 1762913100000, cooldownKind: 'upstream_5xx', stickySessions: 0 },
+    { id: 'trae-local', running: true, dialect: 'openai', port: 8787, weight: 12.5, quotaRatio: 0.62, inFlight: 1, consecutiveFails: 0, successRate: 0.984, lastUsedAt: 1762912000000, cooldownUntil: 0, cooldownKind: 0, stickySessions: 2 },
+    { id: 'qoder-cn', running: true, dialect: 'both', port: 8789, weight: 9.1, quotaRatio: 0.66, inFlight: 0, consecutiveFails: 0, successRate: 0.997, lastUsedAt: 1762912000000, cooldownUntil: 0, cooldownKind: 0, stickySessions: 0 },
+    { id: 'workbuddy', running: false, dialect: null, port: null, weight: 0, quotaRatio: null, inFlight: 0, consecutiveFails: 4, successRate: 0.5, lastUsedAt: 1762911500000, cooldownUntil: 1762913100000, cooldownKind: 'upstream_5xx', stickySessions: 0 },
+    { id: 'zcode', running: true, dialect: 'openai', port: 8791, weight: 7.5, quotaRatio: null, inFlight: 0, consecutiveFails: 0, successRate: 0, lastUsedAt: 0, cooldownUntil: 0, cooldownKind: 0, stickySessions: 0 },
   ],
 };
 

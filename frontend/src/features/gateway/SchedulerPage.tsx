@@ -89,14 +89,27 @@ function LaneCard({ lane, now }: { lane: SchedulerLane; now: number }) {
         <div className="flex flex-col gap-1">
           <div className="flex items-baseline justify-between gap-2 text-xs">
             <span className="text-muted-foreground">成功率</span>
-            <span className="font-mono tabular-nums">{fmtPercent(lane.successRate, 1)}</span>
+            {lane.successRate === null ? (
+              <span
+                className="font-mono tabular-nums text-muted-foreground"
+                title="网关未记录到该上游的调用样本；0% 并不代表持续失败"
+              >
+                {DASH}
+              </span>
+            ) : (
+              <span className="font-mono tabular-nums">{fmtPercent(lane.successRate, 1)}</span>
+            )}
           </div>
-          <div className={successTone(lane.successRate)}>
-            <Progress
-              value={Math.max(0, Math.min(100, lane.successRate * 100))}
-              aria-label={`成功率 ${fmtPercent(lane.successRate, 1)}`}
-            />
-          </div>
+          {lane.successRate === null ? (
+            <span className="text-[10px] text-muted-foreground">尚无调用样本</span>
+          ) : (
+            <div className={successTone(lane.successRate)}>
+              <Progress
+                value={Math.max(0, Math.min(100, lane.successRate * 100))}
+                aria-label={`成功率 ${fmtPercent(lane.successRate, 1)}`}
+              />
+            </div>
+          )}
         </div>
 
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">

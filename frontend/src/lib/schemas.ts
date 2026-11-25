@@ -44,6 +44,7 @@ export const gatewayStatusEnvelope = z.looseObject({
         inFlight: z.number().default(0),
         consecutiveFails: z.number().default(0),
         successRate: z.number().default(0),
+        lastUsedAt: z.number().nullable().default(null),
         cooldownUntil: z.number().nullable().optional(),
         cooldownKind: z.string().nullable().optional(),
         sticky: z.number().optional(),

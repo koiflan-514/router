@@ -188,6 +188,8 @@ export function toGatewayProviderSnap(raw) {
     inFlight: intOr(s.inFlight, 0),
     consecutiveFails: intOr(s.consecutiveFails, 0),
     successRate: intOr(s.successRate, 0),
+    // 网关以 0 / null 表示"从未被调用过"；成功率 0 只在这个时间戳 > 0 时才有样本。
+    lastUsedAt: num(s.lastUsedAt),
     // 网关以 0 表示"无冷却"
     cooldownUntil: cooldownUntil && cooldownUntil > 0 ? cooldownUntil : null,
     cooldownKind: cooldownKindRaw === 0 || cooldownKindRaw === '' || cooldownKindRaw == null ? null : str(cooldownKindRaw),
